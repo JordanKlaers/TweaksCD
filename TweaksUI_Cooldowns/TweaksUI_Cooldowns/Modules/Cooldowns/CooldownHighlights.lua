@@ -577,6 +577,7 @@ local function GetRadialColor(trackerKey, slotIndex)
 end
 
 local function SetRadialColor(trackerKey, slotIndex, color)
+    DevTool:AddData(color, 'color')
     local db = GetDB(trackerKey)
     if db then db.radialSwipe.color[slotIndex] = color end
 end
@@ -1755,8 +1756,8 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
         
         -- Apply color settings
         local color = GetRadialColor(trackerKey, slotIndex)
-        if color and frame.radialSwipe.SetVertexColor then
-            frame.radialSwipe:SetVertexColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
+        if color and frame.radialSwipe.SetColor then
+            frame.radialSwipe:SetColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
         end
         
         -- Apply position offset
