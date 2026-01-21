@@ -316,6 +316,28 @@ function RadialSwipe:SetDesaturated(desaturated)
   end
 end
 
+-- Set position offset
+function RadialSwipe:SetOffset(x, y)
+  self.offsetX = x or 0
+  self.offsetY = y or 0
+  -- Update texture positions
+  for i = 1, 3 do
+    self.textures[i]:ClearAllPoints()
+    self.textures[i]:SetPoint("CENTER", self.parent, "CENTER", self.offsetX, self.offsetY)
+    self.textures[i]:SetSize(self.width, self.height)
+  end
+end
+
+-- Set rotation (in degrees)
+function RadialSwipe:SetRotation(rotation)
+  -- Convert degrees to radians (Lua's trig functions use radians)
+  self.texRotation = rad(rotation or 0)
+  -- Rotation will be applied in UpdateTextures through texture coordinate transformation
+  if self.visible then
+    self:UpdateTextures()
+  end
+end
+
 -- Show the spinner
 function RadialSwipe:Show()
   self.visible = true
@@ -345,14 +367,15 @@ function RadialSwipe:SetSize(width, height)
   self.width = width
   self.height = height
 
-  -- Resize and center the textures
+  -- Resize and center the textures (apply current offset if set)
+  local offsetX = self.offsetX or 0
+  local offsetY = self.offsetY or 0
   for i = 1, 3 do
     self.textures[i]:ClearAllPoints()
     self.textures[i]:SetSize(width, height)
-    self.textures[i]:SetPoint("CENTER", self.parent, "CENTER", 0, 0)
+    self.textures[i]:SetPoint("CENTER", self.parent, "CENTER", offsetX, offsetY)
   end
-
-  self:UpdateTextures()
+	self:UpdateTextures()
 end
 
 -- Set rotation (in radians)
@@ -408,10 +431,32 @@ function RadialSwipe:OnUpdate(parentFrame)
 		return
 	end
 
+	-- If a real cooldown is active, continue animating it regardless of new cooldown data
+	if parentFrame.radialSwipe.realCooldownActive then
+		local startSec = parentFrame.radialSwipe.realCooldownStart
+		local durationSec = parentFrame.radialSwipe.realCooldownDuration
+		local currentTime = GetTime()
+		local elapsed = currentTime - startSec
+		local progress = elapsed / durationSec
+
+		if progress >= 1 then
+			-- Real cooldown finished
+			parentFrame.radialSwipe:Hide()
+			parentFrame.radialSwipe.realCooldownActive = false
+			parentFrame.radialSwipe.realCooldownStart = nil
+			parentFrame.radialSwipe.realCooldownDuration = nil
+		else
+			-- Continue animating the real cooldown
+			parentFrame.radialSwipe:SetProgressValue(progress, 0, 360)
+			parentFrame.radialSwipe:Show()
+		end
+		return
+	end
+
 	local start, duration = parentFrame.cooldown:GetCooldownTimes()
 	
 	-- Check if there's an active cooldown (duration in milliseconds)
-	-- Filter out GCD (< 3000ms) to only show swipe for real cooldowns
+	-- Filter out GCD (< 2000ms) to only show swipe for real cooldowns
 	if not start or not duration or duration == 0 or duration < GCD_THRESHOLD then
 		parentFrame.radialSwipe:Hide()
 		return
@@ -424,9 +469,17 @@ function RadialSwipe:OnUpdate(parentFrame)
 	local elapsed = currentTime - startSec
 	local progress = elapsed / durationSec  -- 0 to 1 (empty to full - FILLS UP during cooldown)
 
+	-- Store real cooldown info and set flag
+	parentFrame.radialSwipe.realCooldownActive = true
+	parentFrame.radialSwipe.realCooldownStart = startSec
+	parentFrame.radialSwipe.realCooldownDuration = durationSec
+
 	if progress >= 1 then
 		-- Cooldown finished (fully filled)
 		parentFrame.radialSwipe:Hide()
+		parentFrame.radialSwipe.realCooldownActive = false
+		parentFrame.radialSwipe.realCooldownStart = nil
+		parentFrame.radialSwipe.realCooldownDuration = nil
 	else
 		-- Update swipe progress - fills clockwise from top as cooldown progresses
 		parentFrame.radialSwipe:SetProgressValue(progress, 0, 360)
@@ -553,3 +606,23 @@ function RadialSwipe:SetProgressValueInverse(progress, startAngle, endAngle)
   local angle = (endAngle - startAngle) * progress + startAngle
   self:SetProgress(angle, endAngle)
 end
+
+--[[
+Wild growth: Interface\PVPFrame\Icons\PVP-Banner-Emblem-5
+Innervate: Interface\PVPFrame\Icons\PVP-Banner-Emblem-56
+green wings thing: Interface\PVPFrame\Icons\PVP-Banner-Emblem-31
+single tree: Interface\PVPFrame\Icons\PVP-Banner-Emblem-75
+bird claw: Interface\PVPFrame\Icons\PVP-Banner-Emblem-3
+dragon roar: Interface\PVPFrame\Icons\PVP-Banner-Emblem-26
+mystical orb: Interface\PVPFrame\Icons\PVP-Banner-Emblem-73
+arcane blast: Interface\PVPFrame\Icons\PVP-Banner-Emblem-74
+smoke: Interface\Custom\smoke.tga
+health pot: Interface\PVPFrame\Icons\PVP-Banner-Emblem-22
+bull head: Interface\PVPFrame\Icons\PVP-Banner-Emblem-2
+cleanse: Interface\custom\cleanse.tga
+shield: Interface\PVPFrame\Icons\PVP-Banner-Emblem-10
+bear paw: Interface\PVPFrame\Icons\PVP-Banner-Emblem-91
+bird: Interface\custom\phoenix.tga
+fist: Interface\PVPFrame\Icons\PVP-Banner-Emblem-69
+angel: Interface\custom\lastwings.tga
+]]
