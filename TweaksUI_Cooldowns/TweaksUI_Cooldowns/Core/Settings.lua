@@ -12,7 +12,7 @@ local Settings = TUICD.Settings
 -- CONSTANTS
 -- ============================================================
 local HUB_WIDTH = 200
-local HUB_HEIGHT = 320
+local HUB_HEIGHT = 355
 local BUTTON_WIDTH = 170
 local BUTTON_HEIGHT = 28
 local BUTTON_SPACING = 6
@@ -204,6 +204,34 @@ function Settings:CreatePanel()
     aboutBtn:SetScript("OnClick", function()
         self:OpenAboutPanel()
     end)
+    yOffset = yOffset - BUTTON_HEIGHT - BUTTON_SPACING
+    
+    -- Panel Scale Button
+    local panelScaleBtn = CreateFrame("Button", nil, hubPanel, "UIPanelButtonTemplate")
+    panelScaleBtn:SetPoint("TOPLEFT", 15, yOffset)
+    panelScaleBtn:SetSize(BUTTON_WIDTH, BUTTON_HEIGHT)
+    hubPanel.panelScaleBtn = panelScaleBtn
+    
+    local function UpdatePanelScaleBtnText()
+        local scale = TUICD.GlobalScale and TUICD.GlobalScale:GetSettingsScale() or 1.0
+        panelScaleBtn:SetText(string.format("Panel Scale: %.0f%%", scale * 100))
+    end
+    UpdatePanelScaleBtnText()
+    hubPanel.UpdatePanelScaleBtnText = UpdatePanelScaleBtnText
+    
+    panelScaleBtn:SetScript("OnClick", function()
+        self:OpenPanelScalePanel()
+    end)
+    panelScaleBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:AddLine("Panel Scale", 1, 0.82, 0)
+        GameTooltip:AddLine("Adjust the size of all TUI:CD settings panels.", 1, 1, 1)
+        GameTooltip:AddLine("Useful for high-DPI displays.", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    panelScaleBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
     yOffset = yOffset - BUTTON_HEIGHT - SECTION_SPACING
     
     -- ============================================================
@@ -254,6 +282,11 @@ function Settings:CreatePanel()
             TUICD.Layout:Exit()
         end
     end)
+    
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(hubPanel, 1.0)
+    end
     
     return hubPanel
 end
@@ -372,6 +405,144 @@ function Settings:OpenAboutPanel()
     end
     
     OpenPanel(moduleSettingsPanels.about)
+end
+
+-- ============================================================
+-- OPEN PANEL SCALE PANEL
+-- ============================================================
+function Settings:OpenPanelScalePanel()
+    if not moduleSettingsPanels.panelScale then
+        local panel = CreateDockedPanel("TUICD_PanelScalePanel", PANEL_WIDTH, 280, "Panel Scale")
+        
+        local content = CreateFrame("Frame", nil, panel)
+        content:SetPoint("TOPLEFT", 15, -40)
+        content:SetPoint("BOTTOMRIGHT", -15, 15)
+        
+        -- Description
+        local desc = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        desc:SetPoint("TOPLEFT", 0, 0)
+        desc:SetWidth(PANEL_WIDTH - 40)
+        desc:SetJustifyH("LEFT")
+        desc:SetText("|cffffffffPanel Scale|r adjusts the size of all TUI:CD settings panels.\n\nUseful for high-DPI displays or if you prefer larger/smaller UI elements.")
+        desc:SetTextColor(0.8, 0.8, 0.8)
+        
+        local yPos = -desc:GetStringHeight() - 30
+        
+        -- Current scale display
+        local scaleLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        scaleLabel:SetPoint("TOPLEFT", 0, yPos)
+        scaleLabel:SetText("Current Scale:")
+        
+        local scaleValue = content:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        scaleValue:SetPoint("LEFT", scaleLabel, "RIGHT", 10, 0)
+        panel.scaleValue = scaleValue
+        
+        yPos = yPos - 40
+        
+        -- Slider
+        local slider = CreateFrame("Slider", "TUICD_PanelScaleSlider", content, "OptionsSliderTemplate")
+        slider:SetPoint("TOPLEFT", 10, yPos)
+        slider:SetWidth(PANEL_WIDTH - 120)
+        slider:SetMinMaxValues(0.5, 2.0)
+        slider:SetValueStep(0.05)
+        slider:SetObeyStepOnDrag(true)
+        slider.Low:SetText("50%")
+        slider.High:SetText("200%")
+        slider.Text:SetText("")
+        panel.slider = slider
+        
+        -- Edit box
+        local editBox = CreateFrame("EditBox", nil, content, "InputBoxTemplate")
+        editBox:SetSize(50, 20)
+        editBox:SetPoint("LEFT", slider, "RIGHT", 15, 0)
+        editBox:SetAutoFocus(false)
+        panel.editBox = editBox
+        
+        local percentLabel = content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        percentLabel:SetPoint("LEFT", editBox, "RIGHT", 2, 0)
+        percentLabel:SetText("%")
+        
+        -- Update function (display only, doesn't apply)
+        local function UpdateDisplay(value)
+            local colorCode = "|cffffd100"
+            if value < 1.0 then
+                colorCode = "|cffffff88"  -- Yellow-ish for decrease
+            elseif value > 1.0 then
+                colorCode = "|cff88ff88"  -- Green-ish for increase
+            end
+            scaleValue:SetText(string.format("%s%.0f%%|r", colorCode, value * 100))
+            editBox:SetText(string.format("%.0f", value * 100))
+        end
+        
+        -- Apply function (actually changes the scale)
+        local function ApplyScale(value)
+            if TUICD.GlobalScale then
+                TUICD.GlobalScale:SetSettingsScale(value)
+            end
+            -- Update the hub button text
+            if hubPanel and hubPanel.UpdatePanelScaleBtnText then
+                hubPanel.UpdatePanelScaleBtnText()
+            end
+        end
+        
+        -- Initialize with current value
+        local currentScale = TUICD.GlobalScale and TUICD.GlobalScale:GetSettingsScale() or 1.0
+        slider:SetValue(currentScale)
+        UpdateDisplay(currentScale)
+        
+        -- While dragging, only update display (don't apply scale)
+        slider:SetScript("OnValueChanged", function(self, value)
+            UpdateDisplay(value)
+        end)
+        
+        -- Apply scale only when mouse is released
+        slider:SetScript("OnMouseUp", function(self)
+            ApplyScale(self:GetValue())
+        end)
+        
+        editBox:SetScript("OnEnterPressed", function(self)
+            local value = tonumber(self:GetText())
+            if value then
+                value = value / 100
+                value = math.max(0.5, math.min(2.0, value))
+                slider:SetValue(value)
+                ApplyScale(value)  -- Apply immediately for manual entry
+            end
+            self:ClearFocus()
+        end)
+        
+        editBox:SetScript("OnEscapePressed", function(self)
+            self:SetText(string.format("%.0f", slider:GetValue() * 100))
+            self:ClearFocus()
+        end)
+        
+        yPos = yPos - 50
+        
+        -- Reset to 100% button
+        local resetBtn = CreateFrame("Button", nil, content, "UIPanelButtonTemplate")
+        resetBtn:SetPoint("TOP", 0, yPos)
+        resetBtn:SetSize(120, 25)
+        resetBtn:SetText("Reset to 100%")
+        resetBtn:SetScript("OnClick", function()
+            slider:SetValue(1.0)
+            ApplyScale(1.0)  -- Apply immediately for button click
+        end)
+        
+        -- Register with GlobalScale for scaling (this panel gets scaled too!)
+        if TUICD.GlobalScale then
+            TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+        end
+        
+        moduleSettingsPanels.panelScale = panel
+    end
+    
+    -- Update slider to current value when opening
+    if moduleSettingsPanels.panelScale.slider then
+        local currentScale = TUICD.GlobalScale and TUICD.GlobalScale:GetSettingsScale() or 1.0
+        moduleSettingsPanels.panelScale.slider:SetValue(currentScale)
+    end
+    
+    OpenPanel(moduleSettingsPanels.panelScale)
 end
 
 -- ============================================================

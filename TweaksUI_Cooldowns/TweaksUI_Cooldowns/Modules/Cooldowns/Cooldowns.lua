@@ -5240,6 +5240,11 @@ function Cooldowns:CreateHub(parent)
         TUICD:Print("Refreshed all tracker layouts")
     end)
     
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(hub, 1.0)
+    end
+    
     cooldownHub = hub
     return hub
 end
@@ -5340,6 +5345,11 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
     panel:SetFrameStrata("DIALOG")
     
     settingsPanels[trackerKey] = panel
+    
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
     
     -- Title
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -8896,6 +8906,11 @@ function Cooldowns:CreateCustomTrackersPanel()
     
     settingsPanels["customTrackers"] = panel
     local trackerKey = "customTrackers"
+    
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
     
     -- Title
     local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")

@@ -7,7 +7,7 @@
 local ADDON_NAME, TUICD = ...
 
 -- Version info
-TUICD.VERSION = "3.0.10"
+TUICD.VERSION = "3.0.11"
 TUICD.ADDON_NAME = ADDON_NAME
 
 -- Build info - Midnight-only (12.0.0+)

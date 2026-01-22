@@ -568,6 +568,11 @@ function ProfilesUI:CreateProfilesPanel()
         ProfilesUI:ShowImportPanel()
     end)
     
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
+    
     profilesPanel = panel
     return panel
 end
@@ -824,6 +829,11 @@ function ProfilesUI:CreateExportPanel()
         ProfilesUI:ShowProfilesPanel()
     end)
     
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
+    
     exportPanel = panel
     return panel
 end
@@ -969,6 +979,11 @@ function ProfilesUI:CreateImportPanel()
         ProfilesUI:ShowProfilesPanel()
     end)
     
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
+    
     importPanel = panel
     return panel
 end
@@ -1090,6 +1105,11 @@ function ProfilesUI:CreateQuickSetupPanel()
         panel:Hide()
         ProfilesUI:ShowProfilesPanel()
     end)
+    
+    -- Register with GlobalScale for settings scaling
+    if TUICD.GlobalScale then
+        TUICD.GlobalScale:RegisterSettingsPanel(panel, 1.0)
+    end
     
     quickSetupPanel = panel
     return panel
