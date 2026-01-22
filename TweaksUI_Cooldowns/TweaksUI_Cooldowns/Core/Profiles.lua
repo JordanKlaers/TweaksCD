@@ -206,6 +206,137 @@ local function EnsureCharProfileInfo()
 end
 
 -- ============================================================================
+-- OLD PROFILE FORMAT CONVERSION
+-- ============================================================================
+
+-- Convert old TUI:CD 2.x profile format to 3.0 format
+-- Old format:
+--   trackers = { essential = {...}, utility = {...}, buffs = {...}, customTrackers = {...} }
+--   containerPositions = { essential = {point, x, y}, ... }
+--   buffHighlights, essentialHighlights, utilityHighlights, customHighlights
+--   customEntries = {...}
+-- New format:
+--   modules = { cooldowns = {...}, layout = { elements = {...} } }
+--   enabled = { cooldowns = true }
+--   buffHighlights, essentialHighlights, utilityHighlights, customHighlights
+--   cooldowns = { customEntries = {...} }
+local function ConvertOldProfileFormat(profileData)
+    if not profileData then return profileData end
+    
+    -- Check if this is old format (has trackers but no modules)
+    local isOldFormat = profileData.trackers ~= nil and profileData.modules == nil
+    
+    if not isOldFormat then
+        return profileData  -- Already new format
+    end
+    
+    TUICD:PrintDebug("Converting old profile format to 3.0 format...")
+    
+    local converted = {
+        modules = {
+            cooldowns = {},
+            layout = {
+                elements = {},
+                dataVersion = 4,  -- BOTTOMLEFT absolute format
+            },
+        },
+        enabled = {
+            cooldowns = true,
+        },
+    }
+    
+    -- Convert tracker settings
+    if profileData.trackers then
+        for trackerKey, trackerSettings in pairs(profileData.trackers) do
+            converted.modules.cooldowns[trackerKey] = DeepCopy(trackerSettings)
+        end
+    end
+    
+    -- Convert container positions to layout elements
+    local containerToElementId = {
+        essential = "EssentialCooldownViewer_TUIWrapper",
+        utility = "UtilityCooldownViewer_TUIWrapper",
+        buffs = "BuffIconCooldownViewer_TUIWrapper",
+        customTrackers = "CustomTracker_TUIWrapper",
+    }
+    
+    if profileData.containerPositions then
+        for key, pos in pairs(profileData.containerPositions) do
+            local elementId = containerToElementId[key]
+            if elementId and pos then
+                converted.modules.layout.elements[elementId] = {
+                    point = pos.point or "CENTER",
+                    x = pos.x or 0,
+                    y = pos.y or 0,
+                    scale = pos.scale or 1,
+                }
+            end
+        end
+    end
+    
+    -- Copy highlight settings (these are the same format)
+    if profileData.buffHighlights then
+        converted.buffHighlights = DeepCopy(profileData.buffHighlights)
+    end
+    if profileData.essentialHighlights then
+        converted.essentialHighlights = DeepCopy(profileData.essentialHighlights)
+    end
+    if profileData.utilityHighlights then
+        converted.utilityHighlights = DeepCopy(profileData.utilityHighlights)
+    end
+    if profileData.customHighlights then
+        converted.customHighlights = DeepCopy(profileData.customHighlights)
+    end
+    
+    -- Convert custom entries
+    if profileData.customEntries then
+        converted.cooldowns = {
+            customEntries = DeepCopy(profileData.customEntries),
+        }
+    end
+    
+    -- Copy docks if present (may not exist in very old profiles)
+    if profileData.docks then
+        converted.docks = DeepCopy(profileData.docks)
+    end
+    
+    -- Copy metadata if present
+    if profileData.savedAt then
+        converted.savedAt = profileData.savedAt
+    end
+    if profileData.addonVersion then
+        converted.addonVersion = profileData.addonVersion
+    end
+    if profileData.importedFrom then
+        converted.importedFrom = profileData.importedFrom
+    end
+    
+    TUICD:PrintDebug("Profile format conversion complete.")
+    return converted
+end
+
+-- Migrate all stored profiles from old format to new format (one-time at load)
+local function MigrateStoredProfiles()
+    EnsureProfileStorage()
+    
+    if not TweaksUI_Cooldowns_DB.profiles then return end
+    
+    local migratedCount = 0
+    for name, profileData in pairs(TweaksUI_Cooldowns_DB.profiles) do
+        -- Check if this is old format
+        if profileData.trackers ~= nil and profileData.modules == nil then
+            TUICD:PrintDebug("Migrating stored profile: " .. name)
+            TweaksUI_Cooldowns_DB.profiles[name] = ConvertOldProfileFormat(profileData)
+            migratedCount = migratedCount + 1
+        end
+    end
+    
+    if migratedCount > 0 then
+        TUICD:Print("Migrated " .. migratedCount .. " profile(s) to 3.0 format.")
+    end
+end
+
+-- ============================================================================
 -- CURRENT SETTINGS GATHERING
 -- ============================================================================
 
@@ -263,6 +394,9 @@ end
 -- Apply settings from a profile table to current character
 function Profiles:ApplySettings(profileData, skipReloadCheck)
     if not profileData then return false, "No profile data" end
+    
+    -- Convert old profile format to 3.0 format if needed
+    profileData = ConvertOldProfileFormat(profileData)
     
     EnsureCharProfileInfo()
     
@@ -929,6 +1063,9 @@ end
 function Profiles:Initialize()
     EnsureProfileStorage()
     EnsureCharProfileInfo()
+    
+    -- Migrate any old-format profiles to 3.0 format (one-time)
+    MigrateStoredProfiles()
     
     -- Restore tracking state from character DB
     if TweaksUI_Cooldowns_CharDB.profileInfo.basedOn then

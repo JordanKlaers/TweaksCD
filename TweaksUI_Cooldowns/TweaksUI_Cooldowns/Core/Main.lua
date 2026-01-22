@@ -428,6 +428,7 @@ local function HandleSlashCommand(msg)
         TUICD:Print("|cffffff00/tuicd status|r - Show debug status info")
         TUICD:Print("|cffffff00/tuicd debug|r - Toggle debug mode")
         TUICD:Print("|cffffff00/tuicd remigrate|r - Re-import positions from TweaksUI")
+        TUICD:Print("|cffffff00/tuicd migrateprofiles|r - Convert old profiles to 3.0 format")
         TUICD:Print("|cffffff00/tuicd version|r - Show version info")
         TUICD:Print("|cffffff00/cdm|r - Toggle Blizzard Cooldown Settings")
         TUICD:Print("|cffffff00/rl|r - Reload UI")
@@ -578,6 +579,94 @@ local function HandleSlashCommand(msg)
             end
         else
             TUICD:PrintError("TweaksUI character data not found. Make sure TweaksUI is installed and has been loaded at least once.")
+        end
+        
+    elseif cmd == "migrateprofiles" then
+        -- Force migration of all stored profiles from old format to new format
+        if not TweaksUI_Cooldowns_DB or not TweaksUI_Cooldowns_DB.profiles then
+            TUICD:Print("No stored profiles found.")
+            return
+        end
+        
+        local migratedCount = 0
+        local skippedCount = 0
+        
+        for name, profileData in pairs(TweaksUI_Cooldowns_DB.profiles) do
+            -- Check if this is old format (has trackers but no modules)
+            if profileData.trackers ~= nil and profileData.modules == nil then
+                TUICD:Print("Migrating profile: |cffffff00" .. name .. "|r")
+                
+                -- Convert to new format
+                local converted = {
+                    modules = {
+                        cooldowns = {},
+                        layout = {
+                            elements = {},
+                            dataVersion = 4,
+                        },
+                    },
+                    enabled = {
+                        cooldowns = true,
+                    },
+                }
+                
+                -- Convert tracker settings
+                if profileData.trackers then
+                    for trackerKey, trackerSettings in pairs(profileData.trackers) do
+                        converted.modules.cooldowns[trackerKey] = trackerSettings
+                    end
+                end
+                
+                -- Convert container positions
+                local containerToElementId = {
+                    essential = "EssentialCooldownViewer_TUIWrapper",
+                    utility = "UtilityCooldownViewer_TUIWrapper",
+                    buffs = "BuffIconCooldownViewer_TUIWrapper",
+                    customTrackers = "CustomTracker_TUIWrapper",
+                }
+                
+                if profileData.containerPositions then
+                    for key, pos in pairs(profileData.containerPositions) do
+                        local elementId = containerToElementId[key]
+                        if elementId and pos then
+                            converted.modules.layout.elements[elementId] = {
+                                point = pos.point or "CENTER",
+                                x = pos.x or 0,
+                                y = pos.y or 0,
+                                scale = pos.scale or 1,
+                            }
+                        end
+                    end
+                end
+                
+                -- Copy highlight settings
+                if profileData.buffHighlights then converted.buffHighlights = profileData.buffHighlights end
+                if profileData.essentialHighlights then converted.essentialHighlights = profileData.essentialHighlights end
+                if profileData.utilityHighlights then converted.utilityHighlights = profileData.utilityHighlights end
+                if profileData.customHighlights then converted.customHighlights = profileData.customHighlights end
+                
+                -- Convert custom entries
+                if profileData.customEntries then
+                    converted.cooldowns = { customEntries = profileData.customEntries }
+                end
+                
+                -- Copy docks and metadata
+                if profileData.docks then converted.docks = profileData.docks end
+                if profileData.savedAt then converted.savedAt = profileData.savedAt end
+                if profileData.addonVersion then converted.addonVersion = profileData.addonVersion end
+                
+                TweaksUI_Cooldowns_DB.profiles[name] = converted
+                migratedCount = migratedCount + 1
+            else
+                skippedCount = skippedCount + 1
+            end
+        end
+        
+        if migratedCount > 0 then
+            TUICD:Print("|cff00ff00Migrated " .. migratedCount .. " profile(s) to 3.0 format.|r")
+            TUICD:Print("You can now switch profiles normally.")
+        else
+            TUICD:Print("No old-format profiles found to migrate. (" .. skippedCount .. " already in 3.0 format)")
         end
         
     else
