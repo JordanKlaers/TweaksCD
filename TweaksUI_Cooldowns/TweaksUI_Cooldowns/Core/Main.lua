@@ -164,6 +164,55 @@ local function RunLegacyMigration()
             for key, value in pairs(sourceDb) do
                 charDb.settings.cooldowns[key] = value
             end
+            
+            -- Also migrate layout positions from TweaksUI
+            local tuiLayout = _G.TweaksUI_CharDB.settings and _G.TweaksUI_CharDB.settings.layout
+            if tuiLayout and tuiLayout.elements then
+                charDb.settings.layout.elements = charDb.settings.layout.elements or {}
+                
+                -- Copy cooldown-related element positions
+                local cooldownElements = {
+                    "EssentialCooldownViewer_TUIWrapper",
+                    "UtilityCooldownViewer_TUIWrapper",
+                    "BuffIconCooldownViewer_TUIWrapper",
+                    "CustomTracker_TUIWrapper",
+                }
+                
+                local migratedCount = 0
+                for _, elementId in ipairs(cooldownElements) do
+                    if tuiLayout.elements[elementId] then
+                        charDb.settings.layout.elements[elementId] = {
+                            point = tuiLayout.elements[elementId].point,
+                            x = tuiLayout.elements[elementId].x,
+                            y = tuiLayout.elements[elementId].y,
+                            scale = tuiLayout.elements[elementId].scale,
+                        }
+                        migratedCount = migratedCount + 1
+                        TUICD:PrintDebug("Migrated position: " .. elementId)
+                    end
+                end
+                
+                -- Also copy any Dock positions
+                for elementId, pos in pairs(tuiLayout.elements) do
+                    if elementId:match("^Dock_") then
+                        charDb.settings.layout.elements[elementId] = {
+                            point = pos.point,
+                            x = pos.x,
+                            y = pos.y,
+                            scale = pos.scale,
+                        }
+                        migratedCount = migratedCount + 1
+                        TUICD:PrintDebug("Migrated dock position: " .. elementId)
+                    end
+                end
+                
+                -- CRITICAL: Set dataVersion to 4 so Layout:OnInitialize doesn't clear our positions
+                if migratedCount > 0 then
+                    charDb.settings.layout.dataVersion = 4
+                    TUICD:Print("Migrated " .. migratedCount .. " tracker positions from TweaksUI.")
+                end
+            end
+            
             charDb._migratedFromTUI = true
             charDb._tuiMigrationVersion = TUICD.VERSION
             TUICD:Print("Migration from TweaksUI complete!")
@@ -200,15 +249,36 @@ local function RunLegacyMigration()
         end
         
         -- Migrate container positions to layout format
+        -- Map old container keys to new element IDs
+        local containerToElementId = {
+            essential = "EssentialCooldownViewer_TUIWrapper",
+            utility = "UtilityCooldownViewer_TUIWrapper",
+            buffs = "BuffIconCooldownViewer_TUIWrapper",
+            customTrackers = "CustomTracker_TUIWrapper",
+        }
+        
+        local migratedPositions = 0
         if sourceDb.containerPositions then
             charDb.settings.layout.elements = charDb.settings.layout.elements or {}
             for key, pos in pairs(sourceDb.containerPositions) do
-                charDb.settings.layout.elements["cooldowns_" .. key] = {
-                    point = pos.point or "CENTER",
-                    x = pos.x or 0,
-                    y = pos.y or 0,
-                }
+                local elementId = containerToElementId[key]
+                if elementId then
+                    charDb.settings.layout.elements[elementId] = {
+                        point = pos.point or "CENTER",
+                        x = pos.x or 0,
+                        y = pos.y or 0,
+                        scale = 1,
+                    }
+                    migratedPositions = migratedPositions + 1
+                    TUICD:PrintDebug("Migrated container position: " .. key .. " -> " .. elementId)
+                end
             end
+        end
+        
+        -- CRITICAL: Set dataVersion to 4 so Layout:OnInitialize doesn't clear our positions
+        if migratedPositions > 0 then
+            charDb.settings.layout.dataVersion = 4
+            TUICD:Print("Migrated " .. migratedPositions .. " tracker positions.")
         end
         
         -- Mark migration complete
@@ -357,7 +427,9 @@ local function HandleSlashCommand(msg)
         TUICD:Print("|cffffff00/tuicd showall|r - Toggle visibility bypass")
         TUICD:Print("|cffffff00/tuicd status|r - Show debug status info")
         TUICD:Print("|cffffff00/tuicd debug|r - Toggle debug mode")
+        TUICD:Print("|cffffff00/tuicd remigrate|r - Re-import positions from TweaksUI")
         TUICD:Print("|cffffff00/tuicd version|r - Show version info")
+        TUICD:Print("|cffffff00/cdm|r - Toggle Blizzard Cooldown Settings")
         TUICD:Print("|cffffff00/rl|r - Reload UI")
         
     elseif cmd == "layout" then
@@ -368,17 +440,16 @@ local function HandleSlashCommand(msg)
         end
         
     elseif cmd == "cdm" or cmd == "cooldownmanager" then
-        -- Open Blizzard's Cooldown Manager
-        if EditModeManagerFrame then
-            HideUIPanel(EditModeManagerFrame)
-            EditModeManagerFrame:Show()
-            C_Timer.After(0.1, function()
-                if EditModeManagerFrame.AccountSettings then
-                    EditModeManagerFrame.AccountSettings:Click()
-                end
-            end)
+        -- Open Blizzard's Cooldown Settings frame
+        local cooldownFrame = CooldownViewerSettings or _G["CooldownViewerSettings"]
+        if cooldownFrame then
+            if cooldownFrame:IsShown() then
+                cooldownFrame:Hide()
+            else
+                cooldownFrame:Show()
+            end
         else
-            TUICD:PrintError("Edit Mode not available")
+            TUICD:PrintError("Cooldown Settings not available")
         end
         
     elseif cmd == "showall" then
@@ -444,6 +515,70 @@ local function HandleSlashCommand(msg)
             preferredIndex = 3,
         }
         StaticPopup_Show("TUICD_RESET_CONFIRM")
+        
+    elseif cmd == "remigrate" then
+        -- Re-run migration for users who lost positions
+        local charDb = TweaksUI_Cooldowns_CharDB
+        if not charDb then
+            TUICD:PrintError("No character database found")
+            return
+        end
+        
+        -- Check if TweaksUI data is available
+        if _G.TweaksUI_CharDB and _G.TweaksUI_CharDB.settings and _G.TweaksUI_CharDB.settings.layout then
+            local tuiLayout = _G.TweaksUI_CharDB.settings.layout
+            if tuiLayout.elements then
+                charDb.settings = charDb.settings or {}
+                charDb.settings.layout = charDb.settings.layout or {}
+                charDb.settings.layout.elements = charDb.settings.layout.elements or {}
+                
+                local cooldownElements = {
+                    "EssentialCooldownViewer_TUIWrapper",
+                    "UtilityCooldownViewer_TUIWrapper",
+                    "BuffIconCooldownViewer_TUIWrapper",
+                    "CustomTracker_TUIWrapper",
+                }
+                
+                local migratedCount = 0
+                for _, elementId in ipairs(cooldownElements) do
+                    if tuiLayout.elements[elementId] then
+                        charDb.settings.layout.elements[elementId] = {
+                            point = tuiLayout.elements[elementId].point,
+                            x = tuiLayout.elements[elementId].x,
+                            y = tuiLayout.elements[elementId].y,
+                            scale = tuiLayout.elements[elementId].scale,
+                        }
+                        migratedCount = migratedCount + 1
+                    end
+                end
+                
+                -- Also copy Dock positions
+                for elementId, pos in pairs(tuiLayout.elements) do
+                    if elementId:match("^Dock_") then
+                        charDb.settings.layout.elements[elementId] = {
+                            point = pos.point,
+                            x = pos.x,
+                            y = pos.y,
+                            scale = pos.scale,
+                        }
+                        migratedCount = migratedCount + 1
+                    end
+                end
+                
+                charDb.settings.layout.dataVersion = 4
+                
+                if migratedCount > 0 then
+                    TUICD:Print("Re-migrated " .. migratedCount .. " positions from TweaksUI.")
+                    TUICD:Print("Reload UI to apply positions: |cff00ff00/rl|r")
+                else
+                    TUICD:Print("No positions found in TweaksUI data.")
+                end
+            else
+                TUICD:PrintError("No layout data found in TweaksUI.")
+            end
+        else
+            TUICD:PrintError("TweaksUI character data not found. Make sure TweaksUI is installed and has been loaded at least once.")
+        end
         
     else
         TUICD:Print("Unknown command: " .. cmd)

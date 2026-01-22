@@ -2213,6 +2213,37 @@ function CooldownHighlights:RefreshAllHighlights(trackerKey)
     UpdateAllHighlights(trackerKey)
 end
 
+-- Helper to check for CDM viewer layout issues (duplicate icons, stale state)
+local function HasViewerLayoutIssue(viewer)
+    local hasIssue = false
+    local iconCount = 0
+    
+    pcall(function()
+        local seenIndices = {}
+        local children = {viewer:GetChildren()}
+        
+        for _, child in ipairs(children) do
+            -- Check if this looks like a CDM icon (has layoutIndex and cooldownID)
+            if child.layoutIndex then
+                -- Check for duplicate layoutIndex (Blizzard bug with stale icons between characters)
+                if seenIndices[child.layoutIndex] then
+                    hasIssue = true
+                    dprint("Duplicate layoutIndex found:", child.layoutIndex)
+                    return  -- Exit early, no need to check more
+                end
+                seenIndices[child.layoutIndex] = true
+                
+                -- Count valid icons
+                if child.cooldownID then
+                    iconCount = iconCount + 1
+                end
+            end
+        end
+    end)
+    
+    return hasIssue, iconCount
+end
+
 function CooldownHighlights:ApplyTrackerVisibility(trackerKey)
     local viewer = GetViewer(trackerKey)
     if not viewer then return end
@@ -2229,6 +2260,16 @@ function CooldownHighlights:ApplyTrackerVisibility(trackerKey)
         
         -- Only call Show() if viewer is actually hidden, and protect against secret value errors
         if not viewer:IsShown() then
+            -- Check for layout issues before showing (Blizzard CDM bug with stale icons)
+            local hasLayoutIssue, iconCount = HasViewerLayoutIssue(viewer)
+            
+            if hasLayoutIssue then
+                -- Don't try to Show() - it will trigger RefreshLayout which errors on duplicates
+                -- Alpha is already 1, so the viewer content is visible anyway
+                dprint("Skipping Show() for " .. trackerKey .. " due to duplicate layoutIndex (Blizzard CDM stale icon bug)")
+                return
+            end
+            
             -- Fix Midnight Beta secret value issue before showing
             pcall(function()
                 for _, child in ipairs({viewer:GetChildren()}) do
