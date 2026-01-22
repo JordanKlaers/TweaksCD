@@ -1,0 +1,44 @@
+## Interface: 120000
+## Title: TweaksUI: Cooldowns
+## Notes: Enhanced cooldown tracking with custom layouts, visibility controls, and proc alerts. Formerly Cooldown Manager Tweaks (CMT).|n|cff00ff00v2.0.6:|r Midnight-only, removed TWW fallback code
+## Author: Meltheran
+## Version: 2.0.6
+## SavedVariables: TweaksUI_Cooldowns_DB
+## SavedVariablesPerCharacter: TweaksUI_Cooldowns_CharDB
+## OptionalDeps: Masque, LibSharedMedia-3.0
+## X-Category: Interface Enhancements
+## X-Website: https://www.curseforge.com/wow/addons/tweaksui-cooldowns
+## IconTexture: Interface\AddOns\TweaksUI_Cooldowns\Media\Textures\TweaksUI_Icon
+
+# Libraries
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
+Libs\LibDeflate\LibDeflate.lua
+Libs\LibFlyPaper-2.0\LibFlyPaper-2.0.lua
+
+# Core
+Core\Constants.lua
+Core\API\API.lua
+Core\API\SpellAPI.lua
+Core\API\AuraAPI.lua
+Core\API\DurationAPI.lua
+Core\Database.lua
+Core\Events.lua
+Core\Utilities.lua
+Core\GlobalScale.lua
+Core\MinimapButton.lua
+Core\LayoutMode.lua
+Core\Profiles.lua
+Core\ProfilesUI.lua
+Core\Migration.lua
+Core\SetupWizard.lua
+Core\Settings.lua
+Core\DocksUI.lua
+Core\Main.lua
+
+# Modules
+Modules\Docks.lua
+Modules\Cooldowns.lua
+Modules\BuffHighlights.lua
+Modules\CooldownHighlights.lua
