@@ -28,7 +28,17 @@ local SecretAPI = TUICD.SecretAPI
 -- ============================================================================
 -- BLIZZARD VIEWER DEFINITIONS
 -- ============================================================================
-
+local ANCHOR_OPTIONS = {
+    { label = "Center", value = "CENTER" },
+    { label = "Top Left", value = "TOPLEFT" },
+    { label = "Top", value = "TOP" },
+    { label = "Top Right", value = "TOPRIGHT" },
+    { label = "Left", value = "LEFT" },
+    { label = "Right", value = "RIGHT" },
+    { label = "Bottom Left", value = "BOTTOMLEFT" },
+    { label = "Bottom", value = "BOTTOM" },
+    { label = "Bottom Right", value = "BOTTOMRIGHT" },
+}
 -- These are the frames Blizzard creates for the Cooldown Manager system
 local TRACKERS = {
     { 
@@ -10812,7 +10822,7 @@ function Cooldowns:CreateCustomTrackersPanel()
         -- DOCK ASSIGNMENT SECTION
         -- =====================================================================
         controls.dockHeader = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        controls.dockHeader:SetPoint("TOPLEFT", controls.iconTextureLabel, "BOTTOMLEFT", 0, -20)
+        controls.dockHeader:SetPoint("TOPLEFT", controls.iconTextureLabel, "BOTTOMLEFT", 0, -30)
         controls.dockHeader:SetText("Dock Assignment")
         controls.dockHeader:SetTextColor(1, 0.82, 0)
         controls.dockHeader:Hide()
@@ -10858,9 +10868,20 @@ function Cooldowns:CreateCustomTrackersPanel()
         controls.cooldownTextValue:SetPoint("LEFT", controls.cooldownTextSlider, "RIGHT", 5, 0)
         controls.cooldownTextValue:SetTextColor(1, 1, 1)
         controls.cooldownTextValue:Hide()
+
+        controls.cooldownTextAnchorLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        controls.cooldownTextAnchorLabel:SetPoint("TOPLEFT", controls.cooldownTextScaleLabel, "BOTTOMLEFT", 0, -20)
+        controls.cooldownTextAnchorLabel:SetText("Anchor:")
+        controls.cooldownTextAnchorLabel:SetTextColor(0.8, 0.8, 0.8)
+        controls.cooldownTextAnchorLabel:Hide()
+        
+        controls.cooldownTextAnchorDropdown = CreateFrame("Frame", nil, controlsPanel, "UIDropDownMenuTemplate")
+        controls.cooldownTextAnchorDropdown:SetPoint("LEFT", controls.cooldownTextAnchorLabel, "RIGHT", -10, 0)
+        UIDropDownMenu_SetWidth(controls.cooldownTextAnchorDropdown, 80)
+        controls.cooldownTextAnchorDropdown:Hide()
         
         controls.cooldownTextColorLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.cooldownTextColorLabel:SetPoint("TOPLEFT", controls.cooldownTextScaleLabel, "BOTTOMLEFT", 0, -10)
+        controls.cooldownTextColorLabel:SetPoint("TOPLEFT", controls.cooldownTextAnchorLabel, "BOTTOMLEFT", 0, -10)
         controls.cooldownTextColorLabel:SetText("Color:")
         controls.cooldownTextColorLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.cooldownTextColorLabel:Hide()
@@ -10947,9 +10968,20 @@ function Cooldowns:CreateCustomTrackersPanel()
         controls.countTextValue:SetPoint("LEFT", controls.countTextSlider, "RIGHT", 5, 0)
         controls.countTextValue:SetTextColor(1, 1, 1)
         controls.countTextValue:Hide()
+
+        controls.countTextAnchorLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        controls.countTextAnchorLabel:SetPoint("TOPLEFT", controls.countTextScaleLabel, "BOTTOMLEFT", 0, -20)
+        controls.countTextAnchorLabel:SetText("Anchor:")
+        controls.countTextAnchorLabel:SetTextColor(0.8, 0.8, 0.8)
+        controls.countTextAnchorLabel:Hide()
+        
+        controls.countTextAnchorDropdown = CreateFrame("Frame", nil, controlsPanel, "UIDropDownMenuTemplate")
+        controls.countTextAnchorDropdown:SetPoint("LEFT", controls.countTextAnchorLabel, "RIGHT", -10, 0)
+        UIDropDownMenu_SetWidth(controls.countTextAnchorDropdown, 80)
+        controls.countTextAnchorDropdown:Hide()
         
         controls.countTextColorLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.countTextColorLabel:SetPoint("TOPLEFT", controls.countTextScaleLabel, "BOTTOMLEFT", 0, -10)
+        controls.countTextColorLabel:SetPoint("TOPLEFT", controls.countTextAnchorLabel, "BOTTOMLEFT", 0, -10)
         controls.countTextColorLabel:SetText("Color:")
         controls.countTextColorLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.countTextColorLabel:Hide()
@@ -11076,7 +11108,7 @@ function Cooldowns:CreateCustomTrackersPanel()
         controls.labelColorBtn:Hide()
         
         controls.labelAnchorLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.labelAnchorLabel:SetPoint("LEFT", controls.labelColorBtn, "RIGHT", 15, 0)
+        controls.labelAnchorLabel:SetPoint("TOPLEFT", controls.labelColorLabel, "BOTTOMLEFT", 0, -20)
         controls.labelAnchorLabel:SetText("Anchor:")
         controls.labelAnchorLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.labelAnchorLabel:Hide()
@@ -11087,7 +11119,7 @@ function Cooldowns:CreateCustomTrackersPanel()
         controls.labelAnchorDropdown:Hide()
         
         controls.labelOffsetXLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.labelOffsetXLabel:SetPoint("TOPLEFT", controls.labelColorLabel, "BOTTOMLEFT", 0, -10)
+        controls.labelOffsetXLabel:SetPoint("TOPLEFT", controls.labelAnchorLabel, "BOTTOMLEFT", 0, -10)
         controls.labelOffsetXLabel:SetText("Offset X:")
         controls.labelOffsetXLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.labelOffsetXLabel:Hide()
@@ -11253,6 +11285,7 @@ function Cooldowns:CreateCustomTrackersPanel()
             local cdTextColor = CooldownHighlights:GetCooldownTextColor(customTrackerKey, slotIndex)
             local cdTextOffsetX = CooldownHighlights:GetCooldownTextOffsetX(customTrackerKey, slotIndex)
             local cdTextOffsetY = CooldownHighlights:GetCooldownTextOffsetY(customTrackerKey, slotIndex)
+            local cooldownTextAnchor = CooldownHighlights:GetCooldownTextAnchor(customTrackerKey, slotIndex)
             
             controls.cooldownTextSlider:SetValue(cdTextScale or 1.0)
             controls.cooldownTextValue:SetText(string.format("%.1f", cdTextScale or 1.0))
@@ -11266,7 +11299,8 @@ function Cooldowns:CreateCustomTrackersPanel()
             local cntTextColor = CooldownHighlights:GetCountTextColor(customTrackerKey, slotIndex)
             local cntTextOffsetX = CooldownHighlights:GetCountTextOffsetX(customTrackerKey, slotIndex)
             local cntTextOffsetY = CooldownHighlights:GetCountTextOffsetY(customTrackerKey, slotIndex)
-            
+            local countTextAnchor = CooldownHighlights:GetCountTextAnchor(customTrackerKey, slotIndex)
+
             controls.countTextSlider:SetValue(cntTextScale or 1.0)
             controls.countTextValue:SetText(string.format("%.1f", cntTextScale or 1.0))
             controls.countTextColorBtn:SetBackdropColor(cntTextColor[1] or 1, cntTextColor[2] or 1, cntTextColor[3] or 1, 1)
@@ -11282,6 +11316,7 @@ function Cooldowns:CreateCustomTrackersPanel()
             local labelColor = CooldownHighlights:GetLabelColor(customTrackerKey, slotIndex)
             local labelOffsetX = CooldownHighlights:GetLabelOffsetX(customTrackerKey, slotIndex)
             local labelOffsetY = CooldownHighlights:GetLabelOffsetY(customTrackerKey, slotIndex)
+            local labelAnchor = CooldownHighlights:GetLabelAnchor(customTrackerKey, slotIndex)
             
             controls.labelEnableCheck:SetChecked(labelEnabled)
             controls.labelTextBox:SetText(labelText or "")
@@ -11332,12 +11367,17 @@ function Cooldowns:CreateCustomTrackersPanel()
                         UIDropDownMenu_AddButton(info, level)
                     end
                 end)
-                -- Set current text
+                -- Set current text (or first option as default)
+                local textSet = false
                 for _, opt in ipairs(options) do
                     if opt.value == currentValue then
                         UIDropDownMenu_SetText(dropdown, opt.label)
+                        textSet = true
                         break
                     end
+                end
+                if not textSet and #options > 0 then
+                    UIDropDownMenu_SetText(dropdown, options[1].label)
                 end
             end
             
@@ -11350,6 +11390,12 @@ function Cooldowns:CreateCustomTrackersPanel()
             end)
             InitDropdown(controls.labelAnchorDropdown, ANCHOR_OPTIONS, labelAnchor, function(anchor)
                 CooldownHighlights:SetLabelAnchor(customTrackerKey, slotIndex, anchor)
+            end)
+
+            -- Initialize radial display dropdown
+            local radialDisplayState = CooldownHighlights:GetRadialDisplayState(customTrackerKey, slotIndex)
+            InitDropdown(controls.radialDisplayDropdown, RADIAL_DISPLAY_OPTIONS, radialDisplayState, function(state)
+                CooldownHighlights:SetRadialDisplayState(customTrackerKey, slotIndex, state)
             end)
             
             -- Initialize dock dropdown
@@ -11398,7 +11444,6 @@ function Cooldowns:CreateCustomTrackersPanel()
             
            
             -- Radial swipe settings (state-independent)
-            local radialDisplayState = CooldownHighlights:GetRadialDisplayState(customTrackerKey, slotIndex)
             local radialTexturePath = CooldownHighlights:GetRadialTexturePath(customTrackerKey, slotIndex)
             local radialColor = CooldownHighlights:GetRadialColor(customTrackerKey, slotIndex)
             local radialScale = CooldownHighlights:GetRadialScale(customTrackerKey, slotIndex)
