@@ -71,6 +71,7 @@ Modules\Layout\UIElements.lua
 # Note: CooldownClones must be loaded first as Cooldowns depends on CooldownContainers
 # ============================================================================
 Modules\Cooldowns\CooldownClones.lua
+Modules\Cooldowns\RadialSwipe.lua
 Modules\Cooldowns\SpellbookHelper.lua
 Modules\Cooldowns\Cooldowns.lua
 Modules\Cooldowns\Docks.lua
