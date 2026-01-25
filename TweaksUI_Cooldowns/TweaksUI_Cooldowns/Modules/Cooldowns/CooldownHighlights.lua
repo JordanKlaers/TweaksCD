@@ -353,7 +353,7 @@ local function GetPlayerState()
         inBattleground = false,
         isSolo = not IsInGroup(),
         hasTarget = UnitExists("target"),
-        isMounted = IsMounted(),
+        isMounted = TUICD.UnitAPI:IsMountedOrTravelForm(),
     }
     
     -- Check instance type
