@@ -1588,12 +1588,20 @@ local function ApplyGridLayout(viewer, trackerKey)
     end
     
     -- Apply per-icon hide based on layout order
+    -- Need to map layout order icons to their original Blizzard slot index
+    local blizzardOrder = GetOriginalOrder(viewer, trackerKey)
+    local iconToSlotIndex = {}  -- [icon] = slotIndex
+    for slotIndex, blizzardIcon in ipairs(blizzardOrder) do
+        iconToSlotIndex[blizzardIcon] = slotIndex
+    end
+    
     for idx, icon in ipairs(icons) do
+        local slotIndex = iconToSlotIndex[icon] or idx  -- Fallback to layout index if not found
         local isHiddenByPerIcon = false
         if trackerKey == "buffs" then
-            isHiddenByPerIcon = TUICD.BuffHighlights and TUICD.BuffHighlights:IsIconHidden(idx)
+            isHiddenByPerIcon = TUICD.BuffHighlights and TUICD.BuffHighlights:IsIconHidden(slotIndex)
         else
-            isHiddenByPerIcon = TUICD.CooldownHighlights and TUICD.CooldownHighlights:IsIconHidden(trackerKey, idx)
+            isHiddenByPerIcon = TUICD.CooldownHighlights and TUICD.CooldownHighlights:IsIconHidden(trackerKey, slotIndex)
         end
         if isHiddenByPerIcon then
             icon:SetAlpha(0)
@@ -2177,11 +2185,13 @@ local function ApplyGridLayout(viewer, trackerKey)
             -- Apply size
             icon:SetSize(iconWidth, iconHeight)
             
-            -- Apply opacity (per-icon hide is applied after visual slots are assigned)
-            if trackerKey ~= "buffs" or not GetSetting("buffs", "greyscaleInactive") then
-                -- Only set alpha here if not buffs with greyscale enabled
-                -- (buff state ticker handles alpha for buffs with greyscale)
-                icon:SetAlpha(iconOpacity)
+            -- Apply opacity (skip if icon is hidden by per-icon settings)
+            if not icon._TUI_hiddenByPerIcon then
+                if trackerKey ~= "buffs" or not GetSetting("buffs", "greyscaleInactive") then
+                    -- Only set alpha here if not buffs with greyscale enabled
+                    -- (buff state ticker handles alpha for buffs with greyscale)
+                    icon:SetAlpha(iconOpacity)
+                end
             end
             
             -- Check if Masque is handling appearance
@@ -3301,10 +3311,6 @@ local function UpdateCustomTrackerVisibility()
     
     -- Check if hidden via per-icon settings
     local CooldownHighlights = TUICD.CooldownHighlights
-    if CooldownHighlights and CooldownHighlights:IsTrackerHidden("custom") then
-        customTrackerFrame:Hide()
-        return
-    end
     
     -- Check if enabled at all
     if not GetSetting("customTrackers", "enabled") then
@@ -3332,7 +3338,14 @@ end
 
 -- Layout custom tracker icons in grid (same logic as ApplyGridLayout)
 local function LayoutCustomTrackerIcons()
+    
     if not customTrackerFrame then return end
+    
+    -- Count hash table entries
+    local iconCount = 0
+    for _ in pairs(customTrackerIcons) do
+        iconCount = iconCount + 1
+    end
     
     -- Collect all icons (including hidden) and sort by listIndex
     local allIcons = {}
@@ -3340,14 +3353,15 @@ local function LayoutCustomTrackerIcons()
         allIcons[#allIcons + 1] = iconFrame
     end
     
+    
     -- Sort by listIndex to get consistent order for per-icon settings
     table.sort(allIcons, function(a, b)
         return (a.listIndex or 0) < (b.listIndex or 0)
     end)
-    
     -- Apply per-icon hide BEFORE layout based on listIndex order
     for idx, icon in ipairs(allIcons) do
         local isHiddenByPerIcon = TUICD.CooldownHighlights and TUICD.CooldownHighlights:IsIconHidden("custom", idx)
+
         if isHiddenByPerIcon then
             icon:SetAlpha(0)
             icon._TUI_hiddenByPerIcon = true
@@ -3546,8 +3560,8 @@ local function LayoutCustomTrackerIcons()
             end
         end
         if overflowSize == 0 then overflowSize = columns end
-        
-        -- Helper function to apply styling to an icon
+
+            -- Helper function to apply styling to an icon
         local function StyleIcon(icon, currentIconIdx)
             icon:SetSize(iconWidth, iconHeight)
             -- Skip alpha if icon is hidden by per-icon settings
@@ -3933,7 +3947,7 @@ local function LayoutCustomTrackerIcons()
                     local iconsInThisCol = math.min(effectiveRows, iconsRemaining)
                     
                     local colHeight = iconsInThisCol * iconHeight + (iconsInThisCol - 1) * spacingV
-                    
+            
                     if alignment == "CENTER" then
                         alignOffsetY = -(totalHeight - colHeight) / 2
                     else -- RIGHT (means Bottom in column mode)
@@ -3948,39 +3962,20 @@ local function LayoutCustomTrackerIcons()
             icon:ClearAllPoints()
             icon:SetPoint("TOPLEFT", customTrackerFrame, "TOPLEFT", finalX, finalY)
             icon:SetSize(iconWidth, iconHeight)
-            icon:SetAlpha(iconOpacity)
-            -- Per-icon hide is applied after visual slots are assigned
+            
+            -- Skip alpha if icon is hidden by per-icon settings
+            if not icon._TUI_hiddenByPerIcon then
+                icon:SetAlpha(iconOpacity)
+            end
             
             -- Check if Masque is handling appearance
             local useMasque = IsMasqueEnabled("customTrackers")
             
-            -- Apply border alpha (skip if Masque is handling it)
+            -- Apply border alpha and edge style (skip if Masque is handling it)
             if not useMasque then
                 ApplyBorderAlpha(icon, borderAlpha)
-            end
-            
-            -- Apply zoom and aspect ratio cropping (skip if Masque is handling it)
-            if not useMasque then
                 pcall(function()
-                    local textureObj = icon.Icon or icon.icon
-                    if textureObj and textureObj.SetTexCoord then
-                        local left = zoom
-                        local right = 1 - zoom
-                        local top = zoom
-                        local bottom = 1 - zoom
-                        
-                        if iconWidth > iconHeight then
-                            local cropAmount = (1 - iconHeight / iconWidth) / 2
-                            top = top + cropAmount * (1 - 2 * zoom)
-                            bottom = bottom - cropAmount * (1 - 2 * zoom)
-                        elseif iconHeight > iconWidth then
-                            local cropAmount = (1 - iconWidth / iconHeight) / 2
-                            left = left + cropAmount * (1 - 2 * zoom)
-                            right = right - cropAmount * (1 - 2 * zoom)
-                        end
-                        
-                        textureObj:SetTexCoord(left, right, top, bottom)
-                    end
+                    ApplyTrackerIconEdgeStyle(icon, trackerKey, iconWidth, iconHeight)
                 end)
             end
             
@@ -4050,7 +4045,7 @@ local function LayoutCustomTrackerIcons()
     
     -- Only show if not hidden via per-icon settings
     local CooldownHighlights = TUICD.CooldownHighlights
-    if not (CooldownHighlights and CooldownHighlights:IsTrackerHidden("custom")) then
+    if not (CooldownHighlights and CooldownHighlights:GetState("custom", "hideTracker")) then
         customTrackerFrame:Show()
     end
     
@@ -6720,46 +6715,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
         controls.procGlowLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.procGlowLabel:Hide()
         
-        -- Aspect ratio dropdown
-        controls.aspectLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.aspectLabel:SetPoint("TOPLEFT", 10, -205)
-        controls.aspectLabel:SetText("Aspect Ratio:")
-        controls.aspectLabel:SetTextColor(0.8, 0.8, 0.8)
-        controls.aspectLabel:Hide()
-        
-        controls.aspectDropdown = CreateFrame("Frame", nil, controlsPanel, "UIDropDownMenuTemplate")
-        controls.aspectDropdown:SetPoint("TOPLEFT", 60, -200)
-        UIDropDownMenu_SetWidth(controls.aspectDropdown, 100)
-        controls.aspectDropdown:Hide()
-        
-        -- Custom aspect ratio inputs
-        controls.customLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customLabel:SetPoint("TOPLEFT", 10, -235)
-        controls.customLabel:SetText("Custom W:")
-        controls.customLabel:SetTextColor(0.7, 0.7, 0.7)
-        controls.customLabel:Hide()
-        
-        controls.customW = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customW:SetPoint("LEFT", controls.customLabel, "RIGHT", 2, 0)
-        controls.customW:SetSize(30, 18)
-        controls.customW:SetAutoFocus(false)
-        controls.customW:SetNumeric(true)
-        controls.customW:SetMaxLetters(3)
-        controls.customW:Hide()
-        
-        controls.customSep = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customSep:SetPoint("LEFT", controls.customW, "RIGHT", 4, 0)
-        controls.customSep:SetText("H:")
-        controls.customSep:SetTextColor(0.7, 0.7, 0.7)
-        controls.customSep:Hide()
-        
-        controls.customH = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customH:SetPoint("LEFT", controls.customSep, "RIGHT", 2, 0)
-        controls.customH:SetSize(30, 18)
-        controls.customH:SetAutoFocus(false)
-        controls.customH:SetNumeric(true)
-        controls.customH:SetMaxLetters(3)
-        controls.customH:Hide()
         
         -- =====================================================
         -- Dock Assignment
@@ -7100,15 +7055,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             end
         end
         
-        -- Helper to update custom aspect visibility
-        local function UpdateCustomAspectVisibility(aspectRatio)
-            local showCustom = (aspectRatio == "custom")
-            controls.customLabel:SetShown(showCustom)
-            controls.customW:SetShown(showCustom)
-            controls.customSep:SetShown(showCustom)
-            controls.customH:SetShown(showCustom)
-        end
-        
         -- Update controls for selected slot
         local function UpdateControlsForSlot(slotIndex)
             if not slotIndex or not BuffHighlights then
@@ -7144,7 +7090,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             local opacity = BuffHighlights:GetOpacity(slotIndex, currentState)
             local saturated = BuffHighlights:GetSaturation(slotIndex, currentState)
             local aspectRatio = BuffHighlights:GetAspectRatio(slotIndex, currentState)
-            local customW, customH = BuffHighlights:GetCustomAspectRatio(slotIndex, currentState)
             
             -- Clear slider scripts BEFORE setting values to prevent old callbacks from firing
             controls.opacitySlider:SetScript("OnValueChanged", nil)
@@ -7168,8 +7113,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.desatCheck:SetChecked(not saturated)
             local showProcGlow = BuffHighlights:GetShowProcGlow(slotIndex)
             controls.procGlowCheck:SetChecked(showProcGlow == nil or showProcGlow == true)
-            controls.customW:SetText(tostring(customW))
-            controls.customH:SetText(tostring(customH))
+
             
             -- Per-icon text settings (state-independent)
             local cdTextScale = BuffHighlights:GetCooldownTextScale(slotIndex)
@@ -7215,32 +7159,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.labelOffsetXValue:SetText(tostring(labelOffsetX or 0))
             controls.labelOffsetYSlider:SetValue(labelOffsetY or 0)
             controls.labelOffsetYValue:SetText(tostring(labelOffsetY or 0))
-            
-            -- Initialize aspect dropdown
-            UIDropDownMenu_Initialize(controls.aspectDropdown, function(self, level)
-                for _, opt in ipairs(ASPECT_OPTIONS) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt.label
-                    info.value = opt.value
-                    info.func = function(self)
-                        BuffHighlights:SetAspectRatio(slotIndex, currentState, self.value)
-                        UIDropDownMenu_SetText(controls.aspectDropdown, self:GetText())
-                        UpdateCustomAspectVisibility(self.value)
-                    end
-                    info.checked = (aspectRatio == opt.value)
-                    UIDropDownMenu_AddButton(info, level)
-                end
-            end)
-            
-            -- Set dropdown text
-            for _, opt in ipairs(ASPECT_OPTIONS) do
-                if opt.value == aspectRatio then
-                    UIDropDownMenu_SetText(controls.aspectDropdown, opt.label)
-                    break
-                end
-            end
-            
-            UpdateCustomAspectVisibility(aspectRatio)
             
             -- Wire up control callbacks
             controls.enableCheck:SetScript("OnClick", function(self)
@@ -7291,26 +7209,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.procGlowCheck:SetScript("OnClick", function(self)
                 BuffHighlights:SetShowProcGlow(slotIndex, self:GetChecked())
             end)
-            
-            local function ApplyCustomAspect()
-                local w = tonumber(controls.customW:GetText()) or 1
-                local h = tonumber(controls.customH:GetText()) or 1
-                if w < 1 then w = 1 end
-                if h < 1 then h = 1 end
-                BuffHighlights:SetCustomAspectRatio(slotIndex, currentState, w, h)
-            end
-            
-            controls.customW:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customW:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
-            controls.customH:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customH:SetScript("OnEditFocusLost", ApplyCustomAspect)
             
             controls.cooldownTextSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value * 10) / 10  -- Round to 1 decimal place
@@ -7523,26 +7421,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
                 BuffHighlights:SetShowProcGlow(slotIndex, self:GetChecked())
                 Cooldowns:SaveSettings()
             end)
-            
-            local function ApplyCustomAspect()
-                local w = tonumber(controls.customW:GetText()) or 1
-                local h = tonumber(controls.customH:GetText()) or 1
-                if w < 1 then w = 1 end
-                if h < 1 then h = 1 end
-                BuffHighlights:SetCustomAspectRatio(slotIndex, currentState, w, h)
-            end
-            
-            controls.customW:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customW:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
-            controls.customH:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customH:SetScript("OnEditFocusLost", ApplyCustomAspect)
             
             -- Label control event handlers
             controls.labelEnableCheck:SetScript("OnClick", function(self)
@@ -7883,7 +7761,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
         local hideTrackerCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
         hideTrackerCheck:SetPoint("TOPLEFT", 5, y)
         hideTrackerCheck:SetSize(24, 24)
-        hideTrackerCheck:SetChecked(CooldownHighlights and CooldownHighlights:IsTrackerHidden(trackerKey) or false)
+        hideTrackerCheck:SetChecked(CooldownHighlights and CooldownHighlights:GetState(trackerKey, "hideTracker") or false)
         hideTrackerCheck:SetScript("OnClick", function(self)
             if CooldownHighlights then
                 CooldownHighlights:SetTrackerHidden(trackerKey, self:GetChecked())
@@ -8080,47 +7958,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
         controls.procGlowLabel:SetText("Show Proc Glow")
         controls.procGlowLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.procGlowLabel:Hide()
-        
-        -- Aspect ratio dropdown
-        controls.aspectLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.aspectLabel:SetPoint("TOPLEFT", 10, -205)
-        controls.aspectLabel:SetText("Aspect Ratio:")
-        controls.aspectLabel:SetTextColor(0.8, 0.8, 0.8)
-        controls.aspectLabel:Hide()
-        
-        controls.aspectDropdown = CreateFrame("Frame", nil, controlsPanel, "UIDropDownMenuTemplate")
-        controls.aspectDropdown:SetPoint("TOPLEFT", 60, -200)
-        UIDropDownMenu_SetWidth(controls.aspectDropdown, 100)
-        controls.aspectDropdown:Hide()
-        
-        -- Custom aspect ratio inputs
-        controls.customLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customLabel:SetPoint("TOPLEFT", 10, -235)
-        controls.customLabel:SetText("Custom W:")
-        controls.customLabel:SetTextColor(0.7, 0.7, 0.7)
-        controls.customLabel:Hide()
-        
-        controls.customW = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customW:SetPoint("LEFT", controls.customLabel, "RIGHT", 2, 0)
-        controls.customW:SetSize(30, 18)
-        controls.customW:SetAutoFocus(false)
-        controls.customW:SetNumeric(true)
-        controls.customW:SetMaxLetters(3)
-        controls.customW:Hide()
-        
-        controls.customSep = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customSep:SetPoint("LEFT", controls.customW, "RIGHT", 4, 0)
-        controls.customSep:SetText("H:")
-        controls.customSep:SetTextColor(0.7, 0.7, 0.7)
-        controls.customSep:Hide()
-        
-        controls.customH = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customH:SetPoint("LEFT", controls.customSep, "RIGHT", 2, 0)
-        controls.customH:SetSize(30, 18)
-        controls.customH:SetAutoFocus(false)
-        controls.customH:SetNumeric(true)
-        controls.customH:SetMaxLetters(3)
-        controls.customH:Hide()
         
         -- =====================================================
         -- Dock Assignment
@@ -8460,15 +8297,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
                 controls.showLabel:SetText("Show when ability is On Cooldown")
             end
         end
-        
-        -- Helper to update custom aspect visibility
-        local function UpdateCustomAspectVisibility(aspectRatio)
-            local showCustom = (aspectRatio == "custom")
-            controls.customLabel:SetShown(showCustom)
-            controls.customW:SetShown(showCustom)
-            controls.customSep:SetShown(showCustom)
-            controls.customH:SetShown(showCustom)
-        end
+
         
         -- Update controls for selected slot
         local function UpdateControlsForSlot(slotIndex)
@@ -8499,12 +8328,11 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             
             -- Get settings for current state
             local isEnabled = CooldownHighlights:IsEnabled(trackerKey, slotIndex)
-            local showState = CooldownHighlights:GetShowState(trackerKey, slotIndex, currentState)
-            local size = CooldownHighlights:GetSize(trackerKey, slotIndex, currentState)
-            local opacity = CooldownHighlights:GetOpacity(trackerKey, slotIndex, currentState)
-            local saturated = CooldownHighlights:GetSaturation(trackerKey, slotIndex, currentState)
-            local aspectRatio = CooldownHighlights:GetAspectRatio(trackerKey, slotIndex, currentState)
-            local customW, customH = CooldownHighlights:GetCustomAspectRatio(trackerKey, slotIndex, currentState)
+            local showState = CooldownHighlights:GetState(trackerKey, currentState .. ".show." .. slotIndex)
+            local size = CooldownHighlights:GetState(trackerKey, currentState .. ".size." .. slotIndex) or DEFAULT_SIZE
+            local opacity = CooldownHighlights:GetState(trackerKey, currentState .. ".opacity." .. slotIndex) or 1.0
+            local saturated = CooldownHighlights:GetState(trackerKey, currentState .. ".saturation." .. slotIndex)
+            if saturated == nil then saturated = (currentState == "active") end
             
             -- Clear slider scripts BEFORE setting values to prevent old callbacks from firing
             controls.opacitySlider:SetScript("OnValueChanged", nil)
@@ -8527,16 +8355,14 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.opacitySlider:SetValue(opacity)
             controls.opacityValue:SetText(math.floor(opacity * 100) .. "%")
             controls.desatCheck:SetChecked(not saturated)
-            local showProcGlow = CooldownHighlights:GetShowProcGlow(trackerKey, slotIndex)
+            local showProcGlow = CooldownHighlights:GetState(trackerKey, "showProcGlow." .. slotIndex)
             controls.procGlowCheck:SetChecked(showProcGlow == nil or showProcGlow == true)
-            controls.customW:SetText(tostring(customW))
-            controls.customH:SetText(tostring(customH))
             
             -- Per-icon text settings (state-independent)
-            local cdTextScale = CooldownHighlights:GetCooldownTextScale(trackerKey, slotIndex)
-            local cdTextColor = CooldownHighlights:GetCooldownTextColor(trackerKey, slotIndex)
-            local cdTextOffsetX = CooldownHighlights:GetCooldownTextOffsetX(trackerKey, slotIndex)
-            local cdTextOffsetY = CooldownHighlights:GetCooldownTextOffsetY(trackerKey, slotIndex)
+            local cdTextScale = CooldownHighlights:GetState(trackerKey, "cooldownTextScale." .. slotIndex) or 1.0
+            local cdTextColor = CooldownHighlights:GetState(trackerKey, "cooldownTextColor." .. slotIndex) or {1, 1, 1, 1}
+            local cdTextOffsetX = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetX." .. slotIndex) or 0
+            local cdTextOffsetY = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetY." .. slotIndex) or 0
             
             controls.cooldownTextSlider:SetValue(cdTextScale or 1.0)
             controls.cooldownTextValue:SetText(string.format("%.1f", cdTextScale or 1.0))
@@ -8546,10 +8372,10 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.cooldownTextOffsetYSlider:SetValue(cdTextOffsetY or 0)
             controls.cooldownTextOffsetYValue:SetText(tostring(cdTextOffsetY or 0))
             
-            local cntTextScale = CooldownHighlights:GetCountTextScale(trackerKey, slotIndex)
-            local cntTextColor = CooldownHighlights:GetCountTextColor(trackerKey, slotIndex)
-            local cntTextOffsetX = CooldownHighlights:GetCountTextOffsetX(trackerKey, slotIndex)
-            local cntTextOffsetY = CooldownHighlights:GetCountTextOffsetY(trackerKey, slotIndex)
+            local cntTextScale = CooldownHighlights:GetState(trackerKey, "countTextScale." .. slotIndex) or 1.0
+            local cntTextColor = CooldownHighlights:GetState(trackerKey, "countTextColor." .. slotIndex) or {1, 1, 1, 1}
+            local cntTextOffsetX = CooldownHighlights:GetState(trackerKey, "countTextOffsetX." .. slotIndex) or 0
+            local cntTextOffsetY = CooldownHighlights:GetState(trackerKey, "countTextOffsetY." .. slotIndex) or 0
             
             controls.countTextSlider:SetValue(cntTextScale or 1.0)
             controls.countTextValue:SetText(string.format("%.1f", cntTextScale or 1.0))
@@ -8560,12 +8386,12 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.countTextOffsetYValue:SetText(tostring(cntTextOffsetY or 0))
             
             -- Label settings (state-independent)
-            local labelEnabled = CooldownHighlights:GetLabelEnabled(trackerKey, slotIndex)
-            local labelText = CooldownHighlights:GetLabelText(trackerKey, slotIndex)
-            local labelSize = CooldownHighlights:GetLabelFontSize(trackerKey, slotIndex)
-            local labelColor = CooldownHighlights:GetLabelColor(trackerKey, slotIndex)
-            local labelOffsetX = CooldownHighlights:GetLabelOffsetX(trackerKey, slotIndex)
-            local labelOffsetY = CooldownHighlights:GetLabelOffsetY(trackerKey, slotIndex)
+            local labelEnabled = CooldownHighlights:GetState(trackerKey, "labelEnabled." .. slotIndex)
+            local labelText = CooldownHighlights:GetState(trackerKey, "labelText." .. slotIndex) or ""
+            local labelSize = CooldownHighlights:GetState(trackerKey, "labelFontSize." .. slotIndex) or 14
+            local labelColor = CooldownHighlights:GetState(trackerKey, "labelColor." .. slotIndex) or {1, 1, 1, 1}
+            local labelOffsetX = CooldownHighlights:GetState(trackerKey, "labelOffsetX." .. slotIndex) or 0
+            local labelOffsetY = CooldownHighlights:GetState(trackerKey, "labelOffsetY." .. slotIndex) or 0
             
             controls.labelEnableCheck:SetChecked(labelEnabled)
             controls.labelTextBox:SetText(labelText or "")
@@ -8577,39 +8403,17 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             controls.labelOffsetYSlider:SetValue(labelOffsetY or 0)
             controls.labelOffsetYValue:SetText(tostring(labelOffsetY or 0))
             
-            -- Initialize aspect dropdown
-            UIDropDownMenu_Initialize(controls.aspectDropdown, function(self, level)
-                for _, opt in ipairs(ASPECT_OPTIONS) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt.label
-                    info.value = opt.value
-                    info.func = function(self)
-                        CooldownHighlights:SetAspectRatio(trackerKey, slotIndex, currentState, self.value)
-                        UIDropDownMenu_SetText(controls.aspectDropdown, self:GetText())
-                        UpdateCustomAspectVisibility(self.value)
-                    end
-                    info.checked = (aspectRatio == opt.value)
-                    UIDropDownMenu_AddButton(info, level)
-                end
-            end)
-            
-            -- Set dropdown text
-            for _, opt in ipairs(ASPECT_OPTIONS) do
-                if opt.value == aspectRatio then
-                    UIDropDownMenu_SetText(controls.aspectDropdown, opt.label)
-                    break
-                end
-            end
-            
-            UpdateCustomAspectVisibility(aspectRatio)
-            
             -- Wire up control callbacks
             controls.enableCheck:SetScript("OnClick", function(self)
                 CooldownHighlights:EnableHighlight(trackerKey, slotIndex, self:GetChecked())
             end)
             
             controls.hideCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetIconHidden(trackerKey, slotIndex, self:GetChecked())
+                CooldownHighlights:UpdateState(trackerKey, {slotIndex = slotIndex}, {
+                    statePath = "hidden." .. slotIndex,
+                    value = self:GetChecked()
+                })
+                Cooldowns:SaveSettings()
             end)
             
             controls.activeBtn:SetScript("OnClick", function()
@@ -8653,28 +8457,8 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
                 CooldownHighlights:SetShowProcGlow(trackerKey, slotIndex, self:GetChecked())
             end)
             
-            local function ApplyCustomAspect()
-                local w = tonumber(controls.customW:GetText()) or 1
-                local h = tonumber(controls.customH:GetText()) or 1
-                if w < 1 then w = 1 end
-                if h < 1 then h = 1 end
-                CooldownHighlights:SetCustomAspectRatio(trackerKey, slotIndex, currentState, w, h)
-            end
-            
-            controls.customW:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customW:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
-            controls.customH:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customH:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
             -- Initialize dock dropdown
-            local currentDock = CooldownHighlights:GetDockAssignment(trackerKey, slotIndex) or 0
+            local currentDock = CooldownHighlights:GetState(trackerKey, "dockAssignment." .. slotIndex) or 0
             UIDropDownMenu_Initialize(controls.dockDropdown, function(self, level)
                 -- None option
                 local info = UIDropDownMenu_CreateInfo()
@@ -8756,26 +8540,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
                 Cooldowns:SaveSettings()
             end)
             
-            local function ApplyCustomAspect()
-                local w = tonumber(controls.customW:GetText()) or 1
-                local h = tonumber(controls.customH:GetText()) or 1
-                if w < 1 then w = 1 end
-                if h < 1 then h = 1 end
-                CooldownHighlights:SetCustomAspectRatio(trackerKey, slotIndex, currentState, w, h)
-            end
-            
-            controls.customW:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customW:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
-            controls.customH:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customH:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
             -- Label control event handlers
             controls.labelEnableCheck:SetScript("OnClick", function(self)
                 CooldownHighlights:SetLabelEnabled(trackerKey, slotIndex, self:GetChecked())
@@ -8800,7 +8564,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             end)
             
             controls.labelColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetLabelColor(trackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(trackerKey, "labelColor." .. slotIndex)
                 local r, g, b, a = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1, currentColor[4] or 1
                 
                 local info = {
@@ -8848,10 +8612,11 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             
             -- Hide icon checkbox handler
             controls.hideCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetIconHidden(trackerKey, slotIndex, self:GetChecked())
+                CooldownHighlights:UpdateState(trackerKey, {slotIndex = slotIndex}, {
+                    statePath = "hidden." .. slotIndex,
+                    value = self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
-                -- Refresh the tracker layout
-                Cooldowns.RefreshTrackerLayout(trackerKey)
             end)
             
             -- Cooldown text control handlers
@@ -8863,7 +8628,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             end)
             
             controls.cooldownTextColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetCooldownTextColor(trackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(trackerKey, "cooldownTextColor." .. slotIndex)
                 local r, g, b = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1
                 
                 local info = {
@@ -8909,7 +8674,7 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             end)
             
             controls.countTextColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetCountTextColor(trackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(trackerKey, "countTextColor." .. slotIndex)
                 local r, g, b = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1
                 
                 local info = {
@@ -10430,10 +10195,13 @@ function Cooldowns:CreateCustomTrackersPanel()
         local hideTrackerCheck = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
         hideTrackerCheck:SetPoint("TOPLEFT", 5, y)
         hideTrackerCheck:SetSize(24, 24)
-        hideTrackerCheck:SetChecked(CooldownHighlights and CooldownHighlights:IsTrackerHidden(customTrackerKey) or false)
+        hideTrackerCheck:SetChecked(CooldownHighlights and CooldownHighlights:GetState(customTrackerKey, "hideTracker") or false)
         hideTrackerCheck:SetScript("OnClick", function(self)
             if CooldownHighlights then
-                CooldownHighlights:SetTrackerHidden(customTrackerKey, self:GetChecked())
+                CooldownHighlights:UpdateState(customTrackerKey, {}, {
+                    statePath = "hideTracker",
+                    value = self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
             end
         end)
@@ -10615,48 +10383,10 @@ function Cooldowns:CreateCustomTrackersPanel()
         controls.desatLabel:SetTextColor(0.8, 0.8, 0.8)
         controls.desatLabel:Hide()
         
-        controls.aspectLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.aspectLabel:SetPoint("TOPLEFT", controls.desatCheck, "BOTTOMLEFT", 0, -10)
-        controls.aspectLabel:SetText("Aspect Ratio:")
-        controls.aspectLabel:SetTextColor(0.8, 0.8, 0.8)
-        controls.aspectLabel:Hide()
-        
-        controls.aspectDropdown = CreateFrame("Frame", nil, controlsPanel, "UIDropDownMenuTemplate")
-        controls.aspectDropdown:SetPoint("LEFT", controls.aspectLabel, "RIGHT", 20, 0)
-        UIDropDownMenu_SetWidth(controls.aspectDropdown, 100)
-        controls.aspectDropdown:Hide()
-        
-        controls.customLabel = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customLabel:SetPoint("TOPLEFT", controls.aspectLabel, "BOTTOMLEFT", 0, -10)
-        controls.customLabel:SetText("Custom W:")
-        controls.customLabel:SetTextColor(0.7, 0.7, 0.7)
-        controls.customLabel:Hide()
-        
-        controls.customW = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customW:SetPoint("LEFT", controls.customLabel, "RIGHT", 2, 0)
-        controls.customW:SetSize(30, 18)
-        controls.customW:SetAutoFocus(false)
-        controls.customW:SetNumeric(true)
-        controls.customW:SetMaxLetters(3)
-        controls.customW:Hide()
-        
-        controls.customSep = controlsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        controls.customSep:SetPoint("LEFT", controls.customW, "RIGHT", 4, 0)
-        controls.customSep:SetText("H:")
-        controls.customSep:SetTextColor(0.7, 0.7, 0.7)
-        controls.customSep:Hide()
-        
-        controls.customH = CreateFrame("EditBox", nil, controlsPanel, "InputBoxTemplate")
-        controls.customH:SetPoint("LEFT", controls.customSep, "RIGHT", 2, 0)
-        controls.customH:SetSize(30, 18)
-        controls.customH:SetAutoFocus(false)
-        controls.customH:SetNumeric(true)
-        controls.customH:SetMaxLetters(3)
-        controls.customH:Hide()
         
 
         controls.defaultSwipeCheck = CreateFrame("CheckButton", nil, controlsPanel, "UICheckButtonTemplate")
-        controls.defaultSwipeCheck:SetPoint("TOPLEFT", controls.customLabel, "BOTTOMLEFT", 0, -10)
+        controls.defaultSwipeCheck:SetPoint("TOPLEFT", controls.desatCheck, "BOTTOMLEFT", 0, -10)
         controls.defaultSwipeCheck:SetSize(24, 24)
         controls.defaultSwipeCheck:Hide()
 
@@ -11202,13 +10932,7 @@ function Cooldowns:CreateCustomTrackersPanel()
             end
         end
         
-        local function UpdateCustomAspectVisibility(aspectRatio)
-            local showCustom = (aspectRatio == "custom")
-            controls.customLabel:SetShown(showCustom)
-            controls.customW:SetShown(showCustom)
-            controls.customSep:SetShown(showCustom)
-            controls.customH:SetShown(showCustom)
-        end
+        
         
         local function UpdateControlsForSlot(slotIndex)
             if not slotIndex or not CooldownHighlights then
@@ -11241,13 +10965,13 @@ function Cooldowns:CreateCustomTrackersPanel()
             
             controls.header:SetText("Slot #" .. slotIndex)
             
-            local isEnabled = CooldownHighlights:IsEnabled(customTrackerKey, slotIndex)
-            local showState = CooldownHighlights:GetShowState(customTrackerKey, slotIndex, currentState)
-            local size = CooldownHighlights:GetSize(customTrackerKey, slotIndex, currentState)
-            local opacity = CooldownHighlights:GetOpacity(customTrackerKey, slotIndex, currentState)
-            local saturated = CooldownHighlights:GetSaturation(customTrackerKey, slotIndex, currentState)
-            local aspectRatio = CooldownHighlights:GetAspectRatio(customTrackerKey, slotIndex, currentState)
-            local customW, customH = CooldownHighlights:GetCustomAspectRatio(customTrackerKey, slotIndex, currentState)
+            local isEnabled = CooldownHighlights:IsEnabled(customTrackerKey, slotIndex, true)
+            local showState = CooldownHighlights:GetState(customTrackerKey, currentState .. ".show." .. slotIndex, true)
+            local size = CooldownHighlights:GetState(customTrackerKey, currentState .. ".size." .. slotIndex, true) or DEFAULT_SIZE
+            local opacity = CooldownHighlights:GetState(customTrackerKey, currentState .. ".opacity." .. slotIndex, true) or 1.0
+            local saturated = CooldownHighlights:GetState(customTrackerKey, currentState .. ".saturation." .. slotIndex, true)
+            if saturated == nil then saturated = (currentState == "active") end
+            local aspectRatio = CooldownHighlights:GetState(customTrackerKey, currentState .. ".aspectRatio." .. slotIndex, true) or "1:1"
             
             -- Clear slider scripts BEFORE setting values to prevent old callbacks from firing
             controls.opacitySlider:SetScript("OnValueChanged", nil)
@@ -11267,21 +10991,19 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.sizeSlider:SetText(tostring(size))
             
             -- Default swipe setting (nil = use tracker default, false = show, true = hide)
-            local hideSweep = CooldownHighlights:GetHideSweep(customTrackerKey, slotIndex)
+            local hideSweep = CooldownHighlights:GetState(customTrackerKey, "hideSweep." .. slotIndex)
             -- Checkbox is "Hide default swipe" so: checked = true (hide), unchecked = false/nil (show)
             controls.defaultSwipeCheck:SetChecked(hideSweep == true)
             controls.opacitySlider:SetValue(opacity)
             controls.opacityValue:SetText(math.floor(opacity * 100) .. "%")
             controls.desatCheck:SetChecked(not saturated)
-            controls.customW:SetText(tostring(customW))
-            controls.customH:SetText(tostring(customH))
             
             -- Per-icon text settings (state-independent)
-            local cdTextScale = CooldownHighlights:GetCooldownTextScale(customTrackerKey, slotIndex)
-            local cdTextColor = CooldownHighlights:GetCooldownTextColor(customTrackerKey, slotIndex)
-            local cdTextOffsetX = CooldownHighlights:GetCooldownTextOffsetX(customTrackerKey, slotIndex)
-            local cdTextOffsetY = CooldownHighlights:GetCooldownTextOffsetY(customTrackerKey, slotIndex)
-            local cooldownTextAnchor = CooldownHighlights:GetCooldownTextAnchor(customTrackerKey, slotIndex)
+            local cdTextScale = CooldownHighlights:GetState(customTrackerKey, "cooldownTextScale." .. slotIndex) or 1
+            local cdTextColor = CooldownHighlights:GetState(customTrackerKey, "cooldownTextColor." .. slotIndex) or {1, 1, 1, 1}
+            local cdTextOffsetX = CooldownHighlights:GetState(customTrackerKey, "cooldownTextOffsetX." .. slotIndex) or 0
+            local cdTextOffsetY = CooldownHighlights:GetState(customTrackerKey, "cooldownTextOffsetY." .. slotIndex) or 0
+            local cooldownTextAnchor = CooldownHighlights:GetState(customTrackerKey, "cooldownTextAnchor." .. slotIndex) or "CENTER"
             
             controls.cooldownTextSlider:SetValue(cdTextScale or 1.0)
             controls.cooldownTextValue:SetText(string.format("%.1f", cdTextScale or 1.0))
@@ -11291,11 +11013,11 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.cooldownTextOffsetYSlider:SetValue(cdTextOffsetY or 0)
             controls.cooldownTextOffsetYValue:SetText(tostring(cdTextOffsetY or 0))
             
-            local cntTextScale = CooldownHighlights:GetCountTextScale(customTrackerKey, slotIndex)
-            local cntTextColor = CooldownHighlights:GetCountTextColor(customTrackerKey, slotIndex)
-            local cntTextOffsetX = CooldownHighlights:GetCountTextOffsetX(customTrackerKey, slotIndex)
-            local cntTextOffsetY = CooldownHighlights:GetCountTextOffsetY(customTrackerKey, slotIndex)
-            local countTextAnchor = CooldownHighlights:GetCountTextAnchor(customTrackerKey, slotIndex)
+            local cntTextScale = CooldownHighlights:GetState(customTrackerKey, "countTextScale." .. slotIndex) or 1.0
+            local cntTextColor = CooldownHighlights:GetState(customTrackerKey, "countTextColor." .. slotIndex) or {1, 1, 1, 1}
+            local cntTextOffsetX = CooldownHighlights:GetState(customTrackerKey, "countTextOffsetX." .. slotIndex) or 0
+            local cntTextOffsetY = CooldownHighlights:GetState(customTrackerKey, "countTextOffsetY." .. slotIndex) or 0
+            local countTextAnchor = CooldownHighlights:GetState(customTrackerKey, "countTextAnchor." .. slotIndex) or "BOTTOMRIGHT"
 
             controls.countTextSlider:SetValue(cntTextScale or 1.0)
             controls.countTextValue:SetText(string.format("%.1f", cntTextScale or 1.0))
@@ -11306,13 +11028,13 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.countTextOffsetYValue:SetText(tostring(cntTextOffsetY or 0))
             
             -- Label settings (state-independent)
-            local labelEnabled = CooldownHighlights:GetLabelEnabled(customTrackerKey, slotIndex)
-            local labelText = CooldownHighlights:GetLabelText(customTrackerKey, slotIndex)
-            local labelSize = CooldownHighlights:GetLabelFontSize(customTrackerKey, slotIndex)
-            local labelColor = CooldownHighlights:GetLabelColor(customTrackerKey, slotIndex)
-            local labelOffsetX = CooldownHighlights:GetLabelOffsetX(customTrackerKey, slotIndex)
-            local labelOffsetY = CooldownHighlights:GetLabelOffsetY(customTrackerKey, slotIndex)
-            local labelAnchor = CooldownHighlights:GetLabelAnchor(customTrackerKey, slotIndex)
+            local labelEnabled = CooldownHighlights:GetState(customTrackerKey, "labelEnabled." .. slotIndex)
+            local labelText = CooldownHighlights:GetState(customTrackerKey, "labelText." .. slotIndex) or ""
+            local labelSize = CooldownHighlights:GetState(customTrackerKey, "labelFontSize." .. slotIndex) or 14
+            local labelColor = CooldownHighlights:GetState(customTrackerKey, "labelColor." .. slotIndex) or {1, 1, 1, 1}
+            local labelOffsetX = CooldownHighlights:GetState(customTrackerKey, "labelOffsetX." .. slotIndex) or 0
+            local labelOffsetY = CooldownHighlights:GetState(customTrackerKey, "labelOffsetY." .. slotIndex) or 0
+            local labelAnchor = CooldownHighlights:GetState(customTrackerKey, "labelAnchor." .. slotIndex) or "CENTER"
             
             controls.labelEnableCheck:SetChecked(labelEnabled)
             controls.labelTextBox:SetText(labelText or "")
@@ -11323,30 +11045,6 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.labelOffsetXValue:SetText(tostring(labelOffsetX or 0))
             controls.labelOffsetYSlider:SetValue(labelOffsetY or 0)
             controls.labelOffsetYValue:SetText(tostring(labelOffsetY or 0))
-            
-            UIDropDownMenu_Initialize(controls.aspectDropdown, function(self, level)
-                for _, opt in ipairs(ASPECT_OPTIONS) do
-                    local info = UIDropDownMenu_CreateInfo()
-                    info.text = opt.label
-                    info.value = opt.value
-                    info.func = function(self)
-                        CooldownHighlights:SetAspectRatio(customTrackerKey, slotIndex, currentState, self.value)
-                        UIDropDownMenu_SetText(controls.aspectDropdown, self:GetText())
-                        UpdateCustomAspectVisibility(self.value)
-                    end
-                    info.checked = (aspectRatio == opt.value)
-                    UIDropDownMenu_AddButton(info, level)
-                end
-            end)
-            
-            for _, opt in ipairs(ASPECT_OPTIONS) do
-                if opt.value == aspectRatio then
-                    UIDropDownMenu_SetText(controls.aspectDropdown, opt.label)
-                    break
-                end
-            end
-            
-            UpdateCustomAspectVisibility(aspectRatio)
 
             -- Helper function to initialize any dropdown with options array
             local function InitDropdown(dropdown, options, currentValue, setFunc)
@@ -11379,30 +11077,45 @@ function Cooldowns:CreateCustomTrackersPanel()
             
             -- Initialize anchor dropdowns
             InitDropdown(controls.cooldownTextAnchorDropdown, ANCHOR_OPTIONS, cooldownTextAnchor, function(anchor)
-                CooldownHighlights:SetCooldownTextAnchor(customTrackerKey, slotIndex, anchor)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "cooldownTextAnchor." .. slotIndex,
+                    value = anchor
+                })
             end)
             InitDropdown(controls.countTextAnchorDropdown, ANCHOR_OPTIONS, countTextAnchor, function(anchor)
-                CooldownHighlights:SetCountTextAnchor(customTrackerKey, slotIndex, anchor)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "countTextAnchor." .. slotIndex,
+                    value = sanchor
+                })
             end)
             InitDropdown(controls.labelAnchorDropdown, ANCHOR_OPTIONS, labelAnchor, function(anchor)
-                CooldownHighlights:SetLabelAnchor(customTrackerKey, slotIndex, anchor)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "labelAnchor." .. slotIndex,
+                    value = anchor
+                })
             end)
 
             -- Initialize radial display dropdown
-            local radialDisplayState = CooldownHighlights:GetRadialDisplayState(customTrackerKey, slotIndex)
+            local radialDisplayState = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.displayState." .. slotIndex) or "always"
             InitDropdown(controls.radialDisplayDropdown, RADIAL_DISPLAY_OPTIONS, radialDisplayState, function(state)
-                CooldownHighlights:SetRadialDisplayState(customTrackerKey, slotIndex, state)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "radialSwipe.displayState." .. slotIndex,
+                    value = state
+                })
             end)
             
             -- Initialize dock dropdown
-            local currentDock = CooldownHighlights:GetDockAssignment(customTrackerKey, slotIndex) or 0
+            local currentDock = CooldownHighlights:GetState(customTrackerKey, "dockAssignment." .. slotIndex) or 0
             UIDropDownMenu_Initialize(controls.dockDropdown, function(self, level)
                 -- None option
                 local info = UIDropDownMenu_CreateInfo()
                 info.text = "None"
                 info.value = 0
                 info.func = function()
-                    CooldownHighlights:SetDockAssignment(customTrackerKey, slotIndex, nil)
+                    CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                        statePath = "dockAssignment." .. slotIndex,
+                        value = nil
+                    })
                     UIDropDownMenu_SetText(controls.dockDropdown, "None")
                 end
                 info.checked = (currentDock == 0 or currentDock == nil)
@@ -11422,7 +11135,10 @@ function Cooldowns:CreateCustomTrackersPanel()
                     end
                     info.value = i
                     info.func = function()
-                        CooldownHighlights:SetDockAssignment(customTrackerKey, slotIndex, i)
+                        CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                            statePath = "dockAssignment." .. slotIndex,
+                            value = i
+                        })
                         UIDropDownMenu_SetText(controls.dockDropdown, dockName)
                     end
                     info.checked = (currentDock == i)
@@ -11440,16 +11156,19 @@ function Cooldowns:CreateCustomTrackersPanel()
             
            
             -- Radial swipe settings (state-independent)
-            local radialTexturePath = CooldownHighlights:GetRadialTexturePath(customTrackerKey, slotIndex)
-            local radialColor = CooldownHighlights:GetRadialColor(customTrackerKey, slotIndex)
-            local radialScale = CooldownHighlights:GetRadialScale(customTrackerKey, slotIndex)
-            local radialOffsetX = CooldownHighlights:GetRadialOffsetX(customTrackerKey, slotIndex)
-            local radialOffsetY = CooldownHighlights:GetRadialOffsetY(customTrackerKey, slotIndex)
-            local radialRotation = CooldownHighlights:GetRadialRotation(customTrackerKey, slotIndex)
+            local radialTexturePath = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.texturePath." .. slotIndex)
+            local radialColor = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.color." .. slotIndex) or {1, 1, 1, 1}
+            local radialScale = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.scale." .. slotIndex) or 1.0
+            local radialOffsetX = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetX." .. slotIndex) or 0
+            local radialOffsetY = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetY." .. slotIndex) or 0
+            local radialRotation = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.rotation." .. slotIndex) or 0
             
             -- Initialize radial display dropdown
             InitDropdown(controls.radialDisplayDropdown, RADIAL_DISPLAY_OPTIONS, radialDisplayState, function(state)
-                CooldownHighlights:SetRadialDisplayState(customTrackerKey, slotIndex, state)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "radialSwipe.displayState." .. slotIndex,
+                    value = state
+                })
             end)
             
             -- Set radial texture path
@@ -11478,16 +11197,19 @@ function Cooldowns:CreateCustomTrackersPanel()
                 end
             end
             
-            local customIconTexture = iconSpellID and CooldownHighlights:GetCustomIconTexture(customTrackerKey, iconSpellID)
+            local customIconTexture = iconSpellID and CooldownHighlights:GetState(customTrackerKey, "customIconTexture." .. tostring(iconSpellID))
             controls.iconTextureBox:SetText(customIconTexture or "")
             controls.iconTextureBox._currentSpellID = iconSpellID  -- Store for script handlers
 
-            local customIconColor = iconSpellID and CooldownHighlights:GetCustomIconColor(customTrackerKey, iconSpellID) or {1, 1, 1}
+            local customIconColor = iconSpellID and CooldownHighlights:GetState(customTrackerKey, "customIconColor." .. tostring(iconSpellID)) or {1, 1, 1}
             controls.iconColorBtn:SetBackdropColor(customIconColor[1] or 1, customIconColor[2] or 1, customIconColor[3] or 1, 1)
             controls.iconColorBtn._currentSpellID = iconSpellID  -- Store for script handler
 
             controls.enableCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:EnableHighlight(customTrackerKey, slotIndex, self:GetChecked())
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = "enabled." .. slotIndex,
+                    value = self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
             end)
             
@@ -11495,7 +11217,11 @@ function Cooldowns:CreateCustomTrackersPanel()
                 -- Checkbox is "Hide default swipe": checked = hide (true), unchecked = use tracker default (nil)
                 local hideSwipe = self:GetChecked()
                 -- Store true to hide, nil to use tracker default
-                CooldownHighlights:SetHideSweep(customTrackerKey, slotIndex, hideSwipe and true or nil)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "hideSweep." .. slotIndex,
+                    value = hideSwipe and true or nil
+                })
+                UpdateControlsForSlot(slotIndex)
             end)
             
             controls.activeBtn:SetScript("OnClick", function()
@@ -11509,8 +11235,10 @@ function Cooldowns:CreateCustomTrackersPanel()
             end)
             
             controls.showCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetShowState(customTrackerKey, slotIndex, currentState, self:GetChecked())
-                Cooldowns:SaveSettings()
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = currentState .. ".show." .. slotIndex,
+                    value = self:GetChecked()
+                })
             end)
             
             controls.sizeSlider:SetScript("OnEnterPressed", function(self)
@@ -11518,72 +11246,79 @@ function Cooldowns:CreateCustomTrackersPanel()
                 local value = tonumber(self:GetText()) or 48
                 value = math.max(0, math.min(5000, value))
                 self:SetText(tostring(value))
-                CooldownHighlights:SetSize(customTrackerKey, slotIndex, currentState, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = currentState .. ".size." .. slotIndex,
+                    value = value
+                })
+                Cooldowns:SaveSettings()
             end)
             controls.sizeSlider:SetScript("OnEditFocusLost", function(self)
                 local value = tonumber(self:GetText()) or 48
                 value = math.max(0, math.min(5000, value))
                 self:SetText(tostring(value))
-                CooldownHighlights:SetSize(customTrackerKey, slotIndex, currentState, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = currentState .. ".size." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
+
+            
             
             controls.opacitySlider:SetScript("OnValueChanged", function(self, value)
                 controls.opacityValue:SetText(math.floor(value * 100) .. "%")
-                CooldownHighlights:SetOpacity(customTrackerKey, slotIndex, currentState, value)
+                CooldownHighlights:UpdateState(customTrackerKey, { slotIndex = slotIndex }, {
+                    statePath = currentState .. ".opacity." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.desatCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetSaturation(customTrackerKey, slotIndex, currentState, not self:GetChecked())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = currentState .. ".saturated." .. slotIndex,
+                    value = not self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
             end)
             
-            local function ApplyCustomAspect()
-                local w = tonumber(controls.customW:GetText()) or 1
-                local h = tonumber(controls.customH:GetText()) or 1
-                if w < 1 then w = 1 end
-                if h < 1 then h = 1 end
-                CooldownHighlights:SetCustomAspectRatio(customTrackerKey, slotIndex, currentState, w, h)
-            end
-            
-            controls.customW:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customW:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
-            controls.customH:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                ApplyCustomAspect()
-            end)
-            controls.customH:SetScript("OnEditFocusLost", ApplyCustomAspect)
-            
             -- Label control event handlers
             controls.labelEnableCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetLabelEnabled(customTrackerKey, slotIndex, self:GetChecked())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelEnabled." .. slotIndex,
+                    value = self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.labelTextBox:SetScript("OnEnterPressed", function(self)
                 self:ClearFocus()
-                CooldownHighlights:SetLabelText(customTrackerKey, slotIndex, self:GetText())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelText." .. slotIndex,
+                    value = self:GetText()
+                })
                 Cooldowns:SaveSettings()
             end)
             controls.labelTextBox:SetScript("OnEditFocusLost", function(self)
-                CooldownHighlights:SetLabelText(customTrackerKey, slotIndex, self:GetText())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelText." .. slotIndex,
+                    value = self:GetText()
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.labelSizeSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.labelSizeValue:SetText(tostring(value))
-                CooldownHighlights:SetLabelFontSize(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelFontSize." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
-            
+
             controls.labelColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetLabelColor(customTrackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(customTrackerKey, "labelColor." .. slotIndex)
                 local r, g, b, a = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1, currentColor[4] or 1
                 
                 local info = {
@@ -11591,19 +11326,28 @@ function Cooldowns:CreateCustomTrackersPanel()
                         local nr, ng, nb = ColorPickerFrame:GetColorRGB()
                         local na = ColorPickerFrame:GetColorAlpha() or 1
                         controls.labelColorBtn:SetBackdropColor(nr, ng, nb, na)
-                        CooldownHighlights:SetLabelColor(customTrackerKey, slotIndex, {nr, ng, nb, na})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "labelColor." .. slotIndex,
+                            value = {nr, ng, nb, na}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     opacityFunc = function()
                         local nr, ng, nb = ColorPickerFrame:GetColorRGB()
                         local na = ColorPickerFrame:GetColorAlpha() or 1
                         controls.labelColorBtn:SetBackdropColor(nr, ng, nb, na)
-                        CooldownHighlights:SetLabelColor(customTrackerKey, slotIndex, {nr, ng, nb, na})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "labelColor." .. slotIndex,
+                            value = {nr, ng, nb, na}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     cancelFunc = function(prev)
                         controls.labelColorBtn:SetBackdropColor(prev.r, prev.g, prev.b, prev.a or 1)
-                        CooldownHighlights:SetLabelColor(customTrackerKey, slotIndex, {prev.r, prev.g, prev.b, prev.a or 1})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "labelColor." .. slotIndex,
+                            value = {prev.r, prev.g, prev.b, prev.a or 1}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     hasOpacity = true,
@@ -11618,20 +11362,29 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.labelOffsetXSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.labelOffsetXValue:SetText(tostring(value))
-                CooldownHighlights:SetLabelOffsetX(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelOffsetX." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
-            
+
             controls.labelOffsetYSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.labelOffsetYValue:SetText(tostring(value))
-                CooldownHighlights:SetLabelOffsetY(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "labelOffsetY." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
-            
+
             -- Hide icon checkbox handler
             controls.hideCheck:SetScript("OnClick", function(self)
-                CooldownHighlights:SetIconHidden(customTrackerKey, slotIndex, self:GetChecked())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "hidden." .. slotIndex,
+                    value = self:GetChecked()
+                })
                 Cooldowns:SaveSettings()
                 -- Refresh the custom tracker layout
                 if LayoutCustomTrackerIcons then
@@ -11643,24 +11396,33 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.cooldownTextSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value * 10) / 10
                 controls.cooldownTextValue:SetText(string.format("%.1f", value))
-                CooldownHighlights:SetCooldownTextScale(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "cooldownTextScale." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
-            
+
             controls.cooldownTextColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetCooldownTextColor(customTrackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(customTrackerKey, "cooldownTextColor." .. slotIndex)
                 local r, g, b = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1
                 
                 local info = {
                     swatchFunc = function()
                         local nr, ng, nb = ColorPickerFrame:GetColorRGB()
                         controls.cooldownTextColorBtn:SetBackdropColor(nr, ng, nb, 1)
-                        CooldownHighlights:SetCooldownTextColor(customTrackerKey, slotIndex, {nr, ng, nb})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "cooldownTextColor." .. slotIndex,
+                            value = {nr, ng, nb}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     cancelFunc = function(prev)
                         controls.cooldownTextColorBtn:SetBackdropColor(prev.r, prev.g, prev.b, 1)
-                        CooldownHighlights:SetCooldownTextColor(customTrackerKey, slotIndex, {prev.r, prev.g, prev.b})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "cooldownTextColor." .. slotIndex,
+                            value = {prev.r, prev.g, prev.b}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     hasOpacity = false,
@@ -11674,14 +11436,20 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.cooldownTextOffsetXSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.cooldownTextOffsetXValue:SetText(tostring(value))
-                CooldownHighlights:SetCooldownTextOffsetX(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "cooldownTextOffsetX." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.cooldownTextOffsetYSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.cooldownTextOffsetYValue:SetText(tostring(value))
-                CooldownHighlights:SetCooldownTextOffsetY(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "cooldownTextOffsetY." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
@@ -11689,24 +11457,33 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.countTextSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value * 10) / 10
                 controls.countTextValue:SetText(string.format("%.1f", value))
-                CooldownHighlights:SetCountTextScale(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "countTextScale." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.countTextColorBtn:SetScript("OnClick", function()
-                local currentColor = CooldownHighlights:GetCountTextColor(customTrackerKey, slotIndex)
+                local currentColor = CooldownHighlights:GetState(customTrackerKey, "countTextColor." .. slotIndex)
                 local r, g, b = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1
                 
                 local info = {
                     swatchFunc = function()
                         local nr, ng, nb = ColorPickerFrame:GetColorRGB()
                         controls.countTextColorBtn:SetBackdropColor(nr, ng, nb, 1)
-                        CooldownHighlights:SetCountTextColor(customTrackerKey, slotIndex, {nr, ng, nb})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "countTextColor." .. slotIndex,
+                            value = {nr, ng, nb}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     cancelFunc = function(prev)
                         controls.countTextColorBtn:SetBackdropColor(prev.r, prev.g, prev.b, 1)
-                        CooldownHighlights:SetCountTextColor(customTrackerKey, slotIndex, {prev.r, prev.g, prev.b})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "countTextColor." .. slotIndex,
+                            value = {prev.r, prev.g, prev.b}
+                        })
                         Cooldowns:SaveSettings()
                     end,
                     hasOpacity = false,
@@ -11720,24 +11497,36 @@ function Cooldowns:CreateCustomTrackersPanel()
             controls.countTextOffsetXSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.countTextOffsetXValue:SetText(tostring(value))
-                CooldownHighlights:SetCountTextOffsetX(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "countTextOffsetX." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
             controls.countTextOffsetYSlider:SetScript("OnValueChanged", function(self, value)
                 value = math.floor(value)
                 controls.countTextOffsetYValue:SetText(tostring(value))
-                CooldownHighlights:SetCountTextOffsetY(customTrackerKey, slotIndex, value)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "countTextOffsetY." .. slotIndex,
+                    value = value
+                })
                 Cooldowns:SaveSettings()
             end)
             
             -- Radial swipe handlers
             controls.radialTextureBox:SetScript("OnEnterPressed", function(self)
                 self:ClearFocus()
-                CooldownHighlights:SetRadialTexturePath(customTrackerKey, slotIndex, self:GetText())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.texturePath." .. slotIndex,
+                    value = self:GetText()
+                })
             end)
             controls.radialTextureBox:SetScript("OnEditFocusLost", function(self)
-                CooldownHighlights:SetRadialTexturePath(customTrackerKey, slotIndex, self:GetText())
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.texturePath." .. slotIndex,
+                    value = self:GetText()
+                })
             end)
             
             controls.radialColorBtn:SetScript("OnClick", function()
@@ -11746,11 +11535,17 @@ function Cooldowns:CreateCustomTrackersPanel()
                     swatchFunc = function()
                         local r, g, b = ColorPickerFrame:GetColorRGB()
                         controls.radialColorBtn:SetBackdropColor(r, g, b, 1)
-                        CooldownHighlights:SetRadialColor(customTrackerKey, slotIndex, {r, g, b, 1})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "radialSwipe.color." .. slotIndex,
+                            value = {r, g, b, 1}
+                        })
                     end,
                     cancelFunc = function(prev)
                         controls.radialColorBtn:SetBackdropColor(prev.r, prev.g, prev.b, 1)
-                        CooldownHighlights:SetRadialColor(customTrackerKey, slotIndex, {prev.r, prev.g, prev.b, 1})
+                        CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                            statePath = "radialSwipe.color." .. slotIndex,
+                            value = {prev.r, prev.g, prev.b, 1}
+                        })
                     end,
                     r = r,
                     g = g,
@@ -11765,35 +11560,53 @@ function Cooldowns:CreateCustomTrackersPanel()
                 if scale < 0.1 then scale = 0.1 end
                 if scale > 5.0 then scale = 5.0 end
                 self:SetText(tostring(scale))
-                CooldownHighlights:SetRadialScale(customTrackerKey, slotIndex, scale)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.scale." .. slotIndex,
+                    value = scale
+                })
             end)
             controls.radialScaleBox:SetScript("OnEditFocusLost", function(self)
                 local scale = tonumber(self:GetText()) or 1.0
                 if scale < 0.1 then scale = 0.1 end
                 if scale > 5.0 then scale = 5.0 end
                 self:SetText(tostring(scale))
-                CooldownHighlights:SetRadialScale(customTrackerKey, slotIndex, scale)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.scale." .. slotIndex,
+                    value = scale
+                })
             end)
             
             -- Position offset arrow button handlers
             controls.radialUpBtn:SetScript("OnClick", function()
-                local currentY = CooldownHighlights:GetRadialOffsetY(customTrackerKey, slotIndex)
-                CooldownHighlights:SetRadialOffsetY(customTrackerKey, slotIndex, currentY + 1)
+                local currentY = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetY." .. slotIndex)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.offsetY." .. slotIndex,
+                    value = currentY + 1
+                })
             end)
             
             controls.radialDownBtn:SetScript("OnClick", function()
-                local currentY = CooldownHighlights:GetRadialOffsetY(customTrackerKey, slotIndex)
-                CooldownHighlights:SetRadialOffsetY(customTrackerKey, slotIndex, currentY - 1)
+                local currentY = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetY." .. slotIndex)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.offsetY." .. slotIndex,
+                    value = currentY - 1
+                })
             end)
             
             controls.radialLeftBtn:SetScript("OnClick", function()
-                local currentX = CooldownHighlights:GetRadialOffsetX(customTrackerKey, slotIndex)
-                CooldownHighlights:SetRadialOffsetX(customTrackerKey, slotIndex, currentX - 1)
+                local currentX = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetX." .. slotIndex)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.offsetX." .. slotIndex,
+                    value = currentX - 1
+                })
             end)
             
             controls.radialRightBtn:SetScript("OnClick", function()
-                local currentX = CooldownHighlights:GetRadialOffsetX(customTrackerKey, slotIndex)
-                CooldownHighlights:SetRadialOffsetX(customTrackerKey, slotIndex, currentX + 1)
+                local currentX = CooldownHighlights:GetState(customTrackerKey, "radialSwipe.offsetX." .. slotIndex)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.offsetX." .. slotIndex,
+                    value = currentX + 1
+                })
             end)
             
             -- Rotation input handlers
@@ -11801,12 +11614,18 @@ function Cooldowns:CreateCustomTrackersPanel()
                 self:ClearFocus()
                 local rotation = tonumber(self:GetText()) or 0
                 self:SetText(tostring(rotation))
-                CooldownHighlights:SetRadialRotation(customTrackerKey, slotIndex, rotation)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.rotation." .. slotIndex,
+                    value = rotation
+                })
             end)
             controls.radialRotationBox:SetScript("OnEditFocusLost", function(self)
                 local rotation = tonumber(self:GetText()) or 0
                 self:SetText(tostring(rotation))
-                CooldownHighlights:SetRadialRotation(customTrackerKey, slotIndex, rotation)
+                CooldownHighlights:UpdateState(customTrackerKey, {slotIndex = slotIndex}, {
+                    statePath = "radialSwipe.rotation." .. slotIndex,
+                    value = rotation
+                })
             end)
             
             -- Custom icon texture handlers (spell ID-based)
@@ -11814,13 +11633,19 @@ function Cooldowns:CreateCustomTrackersPanel()
                 self:ClearFocus()
                 local spellID = self._currentSpellID
                 if spellID then
-                    CooldownHighlights:SetCustomIconTexture(customTrackerKey, spellID, self:GetText())
+                    CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
+                        statePath = "customIconTexture." .. tostring(spellID),
+                        value = self:GetText()
+                    })
                 end
             end)
             controls.iconTextureBox:SetScript("OnEditFocusLost", function(self)
                 local spellID = self._currentSpellID
                 if spellID then
-                    CooldownHighlights:SetCustomIconTexture(customTrackerKey, spellID, self:GetText())
+                    CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
+                        statePath = "customIconTexture." .. tostring(spellID),
+                        value = self:GetText()
+                    })
                 end
             end)
             
@@ -11828,7 +11653,7 @@ function Cooldowns:CreateCustomTrackersPanel()
                 local spellID = self._currentSpellID
                 if not spellID then return end
                 
-                local currentColor = CooldownHighlights:GetCustomIconColor(customTrackerKey, spellID)
+                local currentColor = CooldownHighlights:GetState(customTrackerKey, "customIconColor." .. tostring(spellID))
                 local r, g, b = currentColor[1] or 1, currentColor[2] or 1, currentColor[3] or 1
                 
                 local info = {}
@@ -11836,30 +11661,20 @@ function Cooldowns:CreateCustomTrackersPanel()
                 info.hasOpacity = false
                 info.swatchFunc = function()
                     local newR, newG, newB = ColorPickerFrame:GetColorRGB()
-                    CooldownHighlights:SetCustomIconColor(customTrackerKey, spellID, {newR, newG, newB})
+                    CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
+                        statePath = "customIconColor." .. tostring(spellID),
+                        value = {newR, newG, newB}
+                    })
                     self:SetBackdropColor(newR, newG, newB, 1)
                 end
                 info.cancelFunc = function()
-                    CooldownHighlights:SetCustomIconColor(customTrackerKey, spellID, {r, g, b})
+                    CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
+                        statePath = "customIconColor." .. tostring(spellID),
+                        value = {r, g, b}
+                    })
                     self:SetBackdropColor(r, g, b, 1)
                 end
                 ColorPickerFrame:SetupColorPickerAndShow(info)
-            end)
-            
-            controls.radialScaleBox:SetScript("OnEnterPressed", function(self)
-                self:ClearFocus()
-                local scale = tonumber(self:GetText()) or 1.0
-                if scale < 0.1 then scale = 0.1 end
-                if scale > 5.0 then scale = 5.0 end
-                self:SetText(tostring(scale))
-                CooldownHighlights:SetRadialScale(customTrackerKey, slotIndex, scale)
-            end)
-            controls.radialScaleBox:SetScript("OnEditFocusLost", function(self)
-                local scale = tonumber(self:GetText()) or 1.0
-                if scale < 0.1 then scale = 0.1 end
-                if scale > 5.0 then scale = 5.0 end
-                self:SetText(tostring(scale))
-                CooldownHighlights:SetRadialScale(customTrackerKey, slotIndex, scale)
             end)
         end
         

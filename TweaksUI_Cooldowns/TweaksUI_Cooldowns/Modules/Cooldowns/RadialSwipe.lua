@@ -247,6 +247,7 @@ function RadialSwipe:InitializeRadialSwipe(parent, size)
     parent.radialSwipe:SetColor(1, 1, 1, 1)  -- White overlay
     parent.radialSwipe:SetBlendMode("BLEND")
     parent.radialSwipe:SetSize(size, size)  -- Match parent size, not hardcoded 200x200
+    parent.radialSwipe:SetProgressValue(1, 0, 360) --start with a full icon display
     parent.radialSwipe:Hide()  -- Hidden when no cooldown
     parent.radialSwipeDefaultSize = size
 end

@@ -10,18 +10,12 @@ TUICD.CooldownHighlights = TUICD.CooldownHighlights or {}
 local CooldownHighlights = TUICD.CooldownHighlights
 
 local RadialSwipe = TUICD.RadialSwipe or {}
--- ============================================================================
--- MIDNIGHT API WRAPPERS (v2.0.0)
--- ============================================================================
 
-local SpellAPI = TUICD.SpellAPI
-local DurationAPI = TUICD.DurationAPI
 
 -- ============================================================================
 -- CONSTANTS
 -- ============================================================================
 
-local UPDATE_INTERVAL = 0.05  -- 20 Hz update rate for responsive per-icon tracking
 local DEFAULT_SIZE = 48
 
 -- Tracker definitions
@@ -59,13 +53,6 @@ local highlightFrames = {
     custom = {},
 }
 
--- Track cooldown state per-icon (true = on cooldown, false = ready)
-local iconCooldownState = {
-    essential = {},
-    utility = {},
-    custom = {},
-}
-
 -- ============================================================================
 -- SPELL ID CACHE (populated outside combat, used during combat)
 -- This is critical for Midnight compatibility - we can't read spellIDs from
@@ -91,15 +78,14 @@ local layoutWrappers = {
     custom = {},
 }
 
-local updateTickers = {}
 local isInitialized = {}
 
--- Debug mode
-local debugMode = false
-local function dprint(...)
-    -- Debug printing disabled
-end
-
+-- Throttle state for UpdateAllHighlights
+local throttleState = {
+    lastUpdate = {},      -- [trackerKey] = timestamp
+    pendingUpdate = {},   -- [trackerKey] = true/false
+    throttleDelay = 0.1,  -- 100ms throttle (10 Hz max update rate)
+}
 -- ============================================================================
 -- DATABASE
 -- ============================================================================
@@ -138,14 +124,24 @@ local function GetDB(trackerKey)
     end
     
     local db = TweaksUI_Cooldowns_CharDB[dbKey]
-    
     -- Ensure all fields exist
     if not db.enabled then db.enabled = {} end
     if not db.positions then db.positions = {} end
-    if not db.active then db.active = {} end
-    if not db.inactive then db.inactive = {} end
+    
+    -- Ensure state tables exist and are actually tables (not booleans from old versions)
+    if type(db.active) ~= "table" then
+        db.active = {}
+    end
+    if type(db.inactive) ~= "table" then
+        db.inactive = {}
+    end
     
     for _, state in ipairs({"active", "inactive"}) do
+        -- Double-check state is a table before accessing nested properties
+        if type(db[state]) ~= "table" then
+            db[state] = {}
+        end
+        
         if not db[state].size then db[state].size = {} end
         if not db[state].opacity then db[state].opacity = {} end
         if not db[state].saturation then db[state].saturation = {} end
@@ -203,459 +199,9 @@ local function GetDB(trackerKey)
     return db
 end
 
--- ============================================================================
--- SETTINGS HELPERS
--- ============================================================================
 
-local function IsHighlightEnabled(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.enabled[slotIndex] == true
-end
 
-local function SetHighlightEnabled(trackerKey, slotIndex, enabled)
-    local db = GetDB(trackerKey)
-    if db then db.enabled[slotIndex] = enabled end
-end
 
-local function IsIconHidden(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.hidden[slotIndex] == true
-end
-
-local function SetIconHidden(trackerKey, slotIndex, hidden)
-    local db = GetDB(trackerKey)
-    if db then db.hidden[slotIndex] = hidden end
-end
-
-local function GetDockAssignment(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.dockAssignment[slotIndex]  -- nil, 1, 2, 3, or 4
-end
-
-local function SetDockAssignment(trackerKey, slotIndex, dockIndex)
-    local db = GetDB(trackerKey)
-    if not db then return end
-    
-    db.dockAssignment[slotIndex] = dockIndex
-    
-    -- Update Docks module
-    if TUICD.Docks then
-        if dockIndex and dockIndex >= 1 and dockIndex <= 4 then
-            TUICD.Docks:AssignIcon(dockIndex, trackerKey, slotIndex)
-        else
-            -- Unassign from all docks
-            for i = 1, 4 do
-                TUICD.Docks:UnassignIcon(i, trackerKey, slotIndex)
-            end
-        end
-    end
-    
-    -- Refresh layout mode overlay (show/hide based on dock status)
-    if TUICD.LayoutMode and TUICD.LayoutMode.RefreshPerIconOverlay then
-        TUICD.LayoutMode:RefreshPerIconOverlay(trackerKey, slotIndex)
-    end
-end
-
-local function GetStateSetting(trackerKey, slotIndex, state, key)
-    local db = GetDB(trackerKey)
-    return db and db[state] and db[state][key] and db[state][key][slotIndex]
-end
-
-local function SetStateSetting(trackerKey, slotIndex, state, key, value)
-    local db = GetDB(trackerKey)
-    if db and db[state] and db[state][key] then
-        db[state][key][slotIndex] = value
-    end
-end
-
-local function GetHighlightSize(trackerKey, slotIndex, state)
-    return GetStateSetting(trackerKey, slotIndex, state or "active", "size") or DEFAULT_SIZE
-end
-
-local function SetHighlightSize(trackerKey, slotIndex, state, size)
-    SetStateSetting(trackerKey, slotIndex, state, "size", size)
-end
-
-local function GetHighlightOpacity(trackerKey, slotIndex, state)
-    local opacity = GetStateSetting(trackerKey, slotIndex, state or "active", "opacity")
-    return opacity or 1.0
-end
-
-local function SetHighlightOpacity(trackerKey, slotIndex, state, opacity)
-    SetStateSetting(trackerKey, slotIndex, state, "opacity", opacity)
-end
-
-local function GetHighlightSaturation(trackerKey, slotIndex, state)
-    local sat = GetStateSetting(trackerKey, slotIndex, state or "active", "saturation")
-    if sat == nil then
-        return state == "active"  -- Default: saturated when active, desaturated when inactive
-    end
-    return sat
-end
-
-local function SetHighlightSaturation(trackerKey, slotIndex, state, saturated)
-    SetStateSetting(trackerKey, slotIndex, state, "saturation", saturated)
-end
-
-local function GetHighlightAspectRatio(trackerKey, slotIndex, state)
-    return GetStateSetting(trackerKey, slotIndex, state or "active", "aspectRatio") or "1:1"
-end
-
-local function SetHighlightAspectRatio(trackerKey, slotIndex, state, ratio)
-    SetStateSetting(trackerKey, slotIndex, state, "aspectRatio", ratio)
-end
-
-local function GetShowState(trackerKey, slotIndex, state)
-    local show = GetStateSetting(trackerKey, slotIndex, state, "show")
-    if show == nil then
-        -- Default: show when active (ready), hide when inactive (on cooldown)
-        return state == "active"
-    end
-    return show
-end
-
-local function SetShowState(trackerKey, slotIndex, state, show)
-    SetStateSetting(trackerKey, slotIndex, state, "show", show)
-end
-
-local function GetHighlightPosition(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.positions[slotIndex]
-end
-
-local function SetHighlightPosition(trackerKey, slotIndex, point, relPoint, x, y)
-    local db = GetDB(trackerKey)
-    if db then
-        db.positions[slotIndex] = { point = point, relPoint = relPoint, x = x, y = y }
-    end
-end
-
-local function IsTrackerHidden(trackerKey)
-    local db = GetDB(trackerKey)
-    return db and db.hideTracker == true
-end
-
-local function SetTrackerHidden(trackerKey, hidden)
-    local db = GetDB(trackerKey)
-    if db then
-        db.hideTracker = hidden
-    end
-end
-
--- Custom label helpers (state-independent)
-local function GetLabelEnabled(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelEnabled[slotIndex] == true
-end
-
-local function SetLabelEnabled(trackerKey, slotIndex, enabled)
-    local db = GetDB(trackerKey)
-    if db then db.labelEnabled[slotIndex] = enabled end
-end
-
-local function GetLabelText(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelText[slotIndex] or ""
-end
-
-local function SetLabelText(trackerKey, slotIndex, text)
-    local db = GetDB(trackerKey)
-    if db then db.labelText[slotIndex] = text end
-end
-
-local function GetLabelFontSize(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelFontSize[slotIndex] or 14
-end
-
-local function SetLabelFontSize(trackerKey, slotIndex, size)
-    local db = GetDB(trackerKey)
-    if db then db.labelFontSize[slotIndex] = size end
-end
-
-local function GetLabelColor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelColor[slotIndex] or {1, 1, 1, 1}  -- Default white
-end
-
-local function SetLabelColor(trackerKey, slotIndex, color)
-    local db = GetDB(trackerKey)
-    if db then db.labelColor[slotIndex] = color end
-end
-
-local function GetLabelOffsetX(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelOffsetX[slotIndex] or 0
-end
-
-local function SetLabelOffsetX(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.labelOffsetX[slotIndex] = offset end
-end
-
-local function GetLabelOffsetY(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelOffsetY[slotIndex] or 0
-end
-
-local function SetLabelOffsetY(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.labelOffsetY[slotIndex] = offset end
-end
-
--- Text scale helpers (state-independent)
-local function GetCooldownTextScale(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.cooldownTextScale[slotIndex] or 1.0
-end
-
-local function SetCooldownTextScale(trackerKey, slotIndex, scale)
-    local db = GetDB(trackerKey)
-    if db then db.cooldownTextScale[slotIndex] = scale end
-end
-
-local function GetCountTextScale(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.countTextScale[slotIndex] or 1.0
-end
-
-local function SetCountTextScale(trackerKey, slotIndex, scale)
-    local db = GetDB(trackerKey)
-    if db then db.countTextScale[slotIndex] = scale end
-end
-
-local function GetCooldownTextColor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.cooldownTextColor[slotIndex] or {1, 1, 1, 1}  -- Default white
-end
-
-local function SetCooldownTextColor(trackerKey, slotIndex, color)
-    local db = GetDB(trackerKey)
-    if db then db.cooldownTextColor[slotIndex] = color end
-end
-
-local function GetCountTextColor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.countTextColor[slotIndex] or {1, 1, 1, 1}  -- Default white
-end
-
-local function SetCountTextColor(trackerKey, slotIndex, color)
-    local db = GetDB(trackerKey)
-    if db then db.countTextColor[slotIndex] = color end
-end
-
-local function GetCooldownTextOffsetX(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.cooldownTextOffsetX[slotIndex] or 0
-end
-
-local function SetCooldownTextOffsetX(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.cooldownTextOffsetX[slotIndex] = offset end
-end
-
-local function GetCooldownTextOffsetY(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.cooldownTextOffsetY[slotIndex] or 0
-end
-
-local function SetCooldownTextOffsetY(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.cooldownTextOffsetY[slotIndex] = offset end
-end
-
-local function GetCountTextOffsetX(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.countTextOffsetX[slotIndex] or 0
-end
-
-local function SetCountTextOffsetX(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.countTextOffsetX[slotIndex] = offset end
-end
-
-local function GetCountTextOffsetY(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.countTextOffsetY[slotIndex] or 0
-end
-
-local function SetCountTextOffsetY(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.countTextOffsetY[slotIndex] = offset end
-end
-
-local function GetCooldownTextAnchor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.cooldownTextAnchor[slotIndex] or "CENTER"
-end
-
-local function SetCooldownTextAnchor(trackerKey, slotIndex, anchor)
-    local db = GetDB(trackerKey)
-    if db then db.cooldownTextAnchor[slotIndex] = anchor end
-end
-
-local function GetCountTextAnchor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.countTextAnchor[slotIndex] or "BOTTOMRIGHT"
-end
-
-local function SetCountTextAnchor(trackerKey, slotIndex, anchor)
-    local db = GetDB(trackerKey)
-    if db then db.countTextAnchor[slotIndex] = anchor end
-end
-
-local function GetLabelAnchor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.labelAnchor[slotIndex] or "CENTER"
-end
-
-local function SetLabelAnchor(trackerKey, slotIndex, anchor)
-    local db = GetDB(trackerKey)
-    if db then db.labelAnchor[slotIndex] = anchor end
-end
-
--- Per-icon sweep visibility (nil = use tracker default)
-local function GetHideSweep(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.hideSweep[slotIndex]  -- Returns nil if not set (use tracker default)
-end
-
-local function SetHideSweep(trackerKey, slotIndex, hide)
-    local db = GetDB(trackerKey)
-    if db then db.hideSweep[slotIndex] = hide end
-end
-
--- Per-icon countdown text visibility (nil = use tracker default)
-local function GetShowCountdownText(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.showCountdownText[slotIndex]  -- Returns nil if not set (use tracker default)
-end
-
-local function SetShowCountdownText(trackerKey, slotIndex, show)
-    local db = GetDB(trackerKey)
-    if db then db.showCountdownText[slotIndex] = show end
-end
-
--- Per-icon proc glow visibility (nil = show proc glow, default true)
-local function GetShowProcGlow(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.showProcGlow and db.showProcGlow[slotIndex]  -- Returns nil if not set (default true)
-end
-
-local function SetShowProcGlow(trackerKey, slotIndex, show)
-    local db = GetDB(trackerKey)
-    if db then
-        db.showProcGlow = db.showProcGlow or {}
-        db.showProcGlow[slotIndex] = show
-    end
-end
-
--- Radial swipe helpers (state-independent)
-local function GetRadialDisplayState(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.displayState[slotIndex] or "always"
-end
-
-local function SetRadialDisplayState(trackerKey, slotIndex, state)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.displayState[slotIndex] = state end
-end
-
-local function GetRadialTexturePath(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.texturePath[slotIndex]
-end
-
-local function SetRadialTexturePath(trackerKey, slotIndex, path)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.texturePath[slotIndex] = path end
-end
-
-local function GetRadialColor(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.color[slotIndex] or {1, 1, 1, 1}
-end
-
-local function SetRadialColor(trackerKey, slotIndex, color)
-    DevTool:AddData(color, 'color')
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.color[slotIndex] = color end
-end
-
-local function GetRadialScale(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.scale[slotIndex] or 1.0
-end
-
-local function SetRadialScale(trackerKey, slotIndex, scale)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.scale[slotIndex] = scale end
-end
-
-local function GetRadialOffsetX(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.offsetX[slotIndex] or 0
-end
-
-local function SetRadialOffsetX(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.offsetX[slotIndex] = offset end
-end
-
-local function GetRadialOffsetY(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.offsetY[slotIndex] or 0
-end
-
-local function SetRadialOffsetY(trackerKey, slotIndex, offset)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.offsetY[slotIndex] = offset end
-end
-
-local function GetRadialRotation(trackerKey, slotIndex)
-    local db = GetDB(trackerKey)
-    return db and db.radialSwipe.rotation[slotIndex] or 0
-end
-
-local function SetRadialRotation(trackerKey, slotIndex, rotation)
-    local db = GetDB(trackerKey)
-    if db then db.radialSwipe.rotation[slotIndex] = rotation end
-end
-
--- Custom icon texture helpers (spell ID-based, persists across slot changes)
-local function GetCustomIconTexture(trackerKey, spellID)
-    if not spellID then return nil end
-    local db = GetDB(trackerKey)
-    return db and db.customIconTexture[tostring(spellID)]
-end
-
-local function SetCustomIconTexture(trackerKey, spellID, texturePath)
-    if not spellID then return end
-    local db = GetDB(trackerKey)
-    if db then
-        db.customIconTexture[tostring(spellID)] = texturePath
-    end
-end
-
-local function GetCustomIconColor(trackerKey, spellID)
-    if not spellID then return {1, 1, 1} end
-    local db = GetDB(trackerKey)
-    if db then
-        local color = db.customIconColor[tostring(spellID)]
-        if color then
-            return color
-        end
-    end
-    return {1, 1, 1}  -- Default white
-end
-
-local function SetCustomIconColor(trackerKey, spellID, color)
-    if not spellID then return end
-    local db = GetDB(trackerKey)
-    if db then
-        db.customIconColor[tostring(spellID)] = color
-    end
-end
 
 -- ============================================================================
 -- ICON COLLECTION
@@ -743,7 +289,6 @@ end
 -- Cache spellIDs for a tracker (ONLY call outside combat)
 local function CacheSpellIDs(trackerKey)
     if InCombatLockdown() then
-        dprint("CacheSpellIDs: Skipped (in combat)", trackerKey)
         return
     end
     
@@ -775,29 +320,12 @@ local function CacheSpellIDs(trackerKey)
     
     if cacheUpdated then
         cacheLastUpdated[trackerKey] = GetTime()
-        dprint("CacheSpellIDs: Updated cache for", trackerKey, "icons:", #icons)
     end
 end
 
 -- Get cached spellID for a slot (safe to call during combat)
 local function GetCachedSpellID(trackerKey, slotIndex)
     return spellIDCache[trackerKey] and spellIDCache[trackerKey][slotIndex]
-end
-
--- Clear cache for a tracker (call when icons might have changed)
-local function ClearSpellIDCache(trackerKey)
-    if trackerKey then
-        wipe(spellIDCache[trackerKey])
-        cacheLastUpdated[trackerKey] = 0
-        dprint("ClearSpellIDCache:", trackerKey)
-    else
-        -- Clear all
-        for key, cache in pairs(spellIDCache) do
-            wipe(cache)
-            cacheLastUpdated[key] = 0
-        end
-        dprint("ClearSpellIDCache: All cleared")
-    end
 end
 
 -- Refresh cache for all trackers (call on PLAYER_REGEN_ENABLED)
@@ -980,7 +508,7 @@ local function GetSlotCount(trackerKey)
 end
 
 local function GetShouldShowCountdownText(trackerKey, slotIndex)
-    local showCountdownText = GetShowCountdownText(trackerKey, slotIndex)  -- Per-icon setting
+    local showCountdownText = CooldownHighlights:GetState(trackerKey, "showCountdownText." .. slotIndex)  -- Per-icon setting
     if showCountdownText == nil and TUICD.Database then
         local countdownSetting = TUICD.Database:GetTrackerSetting(trackerKey, "showCountdownText")
         showCountdownText = (countdownSetting ~= nil) and countdownSetting or true
@@ -1000,7 +528,7 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
     
     local trackerType = TRACKER_TYPES[trackerKey]
     local frameName = trackerType.framePrefix .. slotIndex
-    local size = GetHighlightSize(trackerKey, slotIndex)
+    local size = CooldownHighlights:GetState(trackerKey, "active.size." .. slotIndex) or DEFAULT_SIZE
     
     -- Check if Masque is enabled for this tracker
     -- For custom highlights, use customTrackers setting
@@ -1037,7 +565,7 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
     frame.Icon = frame.icon  -- Masque expects .Icon
     if masqueEnabled then
         frame.icon:SetAllPoints(frame)
-        frame.icon:SetTexCoord(0, 1, 0, 1)  -- Let Masque handle texcoords
+        frame.icon:SetTexCoord(0, 1, 0, 1)
     else
         frame.icon:SetPoint("TOPLEFT", 2, -2)
         frame.icon:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -1047,9 +575,15 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
 
     -- Create radial swipe for cooldown animation (matches DebugTest configuration)
     RadialSwipe:InitializeRadialSwipe(frame, size)
-     -- Store default size for later adjustments
-    -- OnUpdate script to animate the radial swipe based on cooldown progress
-    frame:SetScript("OnUpdate", function(self) RadialSwipe:OnUpdate(self) end)
+    
+    -- Apply custom texture from DB if set, otherwise use default
+    local radialTexture = CooldownHighlights:GetState(trackerKey, "radialSwipe.texturePath." .. slotIndex)
+    if radialTexture and radialTexture ~= "" then
+        frame.radialSwipe:SetTexture(radialTexture)
+    end
+    
+    
+    -- TODO: implement the cooldown swipe considering performance - frame:SetScript("OnUpdate", function(self) RadialSwipe:OnUpdate(self) end)
 
     -- Cooldown spiral (uses CooldownFrameTemplate which includes countdown text)
     frame.cooldown = CreateFrame("Cooldown", frameName .. "_Cooldown", frame, "CooldownFrameTemplate")
@@ -1059,8 +593,14 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
     frame.cooldown:SetDrawBling(false)
     frame.cooldown:SetSwipeColor(0, 0, 0, 0.8)
     
+    frame.cooldown._TUI_trackerKey = trackerKey
+    frame.cooldown._TUI_slotIndex = slotIndex
+    frame.cooldown:SetScript("OnCooldownDone", function(self)
+        CooldownHighlights:UpdateHighlightFrame(self._TUI_trackerKey, self._TUI_slotIndex)
+    end)
+    
     -- Apply sweep and countdown text settings (per-icon overrides tracker-level)
-    local hideSweep = GetHideSweep(trackerKey, slotIndex)  -- Per-icon setting (true=hide, false=show, nil=use tracker default)
+    local hideSweep = CooldownHighlights:GetState(trackerKey, "hideSweep." .. slotIndex)  -- Per-icon setting (true=hide, false=show, nil=use tracker default)
     
     
     -- Handle sweep visibility with proper hierarchy
@@ -1167,7 +707,7 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
     frame._TUI_useMasque = masqueEnabled
     
     -- Set initial position
-    local pos = GetHighlightPosition(trackerKey, slotIndex)
+    local pos = CooldownHighlights:GetState(trackerKey, "position." .. slotIndex)
     if pos then
         frame:ClearAllPoints()
         frame:SetPoint(pos.point, UIParent, pos.relPoint or pos.point, pos.x, pos.y)
@@ -1175,7 +715,7 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
         frame:SetPoint("CENTER", UIParent, "CENTER", -200 + (slotIndex * 60), -150)
     end
     
-    frame:Hide()
+    frame:Show()
     highlightFrames[trackerKey][slotIndex] = frame
     
     -- Register with LayoutMode for drag support
@@ -1196,11 +736,10 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
                 Border = frame.Border,
             })
             frame._TUI_MasqueGroup = masqueTrackerKey
-            dprint("Added highlight frame to Masque group:", trackerKey, slotIndex)
         end
     end
-    
-    dprint("Created highlight frame:", trackerKey, slotIndex)
+    CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotIndex, GetDB(trackerKey) or {})
+
     return frame
 end
 
@@ -1223,178 +762,14 @@ local function ParseAspectRatio(aspectStr, trackerKey, slotIndex, state)
     return 1, 1
 end
 
-local function ApplyAspectRatio(frame, size, aspectStr, trackerKey, slotIndex, state)
-    local ratioW, ratioH = ParseAspectRatio(aspectStr, trackerKey, slotIndex, state)
-    local width, height
-    
-    if ratioW >= ratioH then
-        width = size
-        height = size * (ratioH / ratioW)
-    else
-        height = size
-        width = size * (ratioW / ratioH)
-    end
-    
-    frame:SetSize(width, height)
-    
-    -- Update radial swipe size based on new frame size and current scale setting
-    -- Only update for "active" (ready) state changes
-    if state == "active" and frame.radialSwipe then
-        local radialScale = GetRadialScale(trackerKey, slotIndex)
-        local swipeSize = math.max(width, height)  -- Use the larger dimension as base
-        if frame.radialSwipe.SetSize then
-            frame.radialSwipe:SetSize(swipeSize * radialScale, swipeSize * radialScale)
-        end
-    end
-    
-    -- Adjust texture coordinates to crop/zoom icon instead of stretching
-    -- This makes non-square frames show a cropped portion of the icon
-    if frame.icon and not frame._TUI_useMasque then
-        local baseInset = 0.08  -- Standard WoW icon inset
-        local texRange = 1 - (baseInset * 2)  -- 0.84
-        
-        local left, right, top, bottom = baseInset, 1 - baseInset, baseInset, 1 - baseInset
-
-        if ratioW > ratioH then
-            -- Wider than tall - crop top/bottom
-            local cropFactor = ratioH / ratioW
-            local vertRange = texRange * cropFactor
-            local vertOffset = (texRange - vertRange) / 2
-            top = baseInset + vertOffset
-            bottom = 1 - baseInset - vertOffset
-        elseif ratioH > ratioW then
-            -- Taller than wide - crop left/right  
-            local cropFactor = ratioW / ratioH
-            local horizRange = texRange * cropFactor
-            local horizOffset = (texRange - horizRange) / 2
-            left = baseInset + horizOffset
-            right = 1 - baseInset - horizOffset
-        end
-        
-        frame.icon:SetTexCoord(left, right, top, bottom)
-    end
-end
-
 -- ============================================================================
 -- UPDATE LOGIC
 -- ============================================================================
-
-local function UpdateHighlightFrame(trackerKey, slotIndex)
+local function CalculateFrameCooldown(trackerKey, slotIndex)
     local frame = highlightFrames[trackerKey][slotIndex]
     if not frame then return end
-    
-    -- Update sweep and countdown text settings (per-icon overrides tracker-level)
-    if frame.cooldown then
-        local hideSweep = GetHideSweep(trackerKey, slotIndex)  -- Per-icon setting (true=hide, false=show, nil=use tracker default)
-
-        -- Handle sweep visibility with proper hierarchy
-        if hideSweep == nil then
-            -- Per-icon not set, check tracker-level hideSweep setting
-            if TUICD.Database then
-                local trackerHideSweep = TUICD.Database:GetTrackerSetting(trackerKey, "hideSweep")
-                hideSweep = (trackerHideSweep == true)  -- Use tracker setting
-            else
-                hideSweep = false  -- Default to showing sweep
-            end
-        end
-        
-        -- Handle countdown text visibility
-        if showCountdownText == nil and TUICD.Database then
-            local countdownSetting = TUICD.Database:GetTrackerSetting(trackerKey, "showCountdownText")
-            showCountdownText = (countdownSetting ~= nil) and countdownSetting or true
-        end
-        if showCountdownText == nil then showCountdownText = true end
-        
-        -- Update stored values for hooks
-        frame.cooldown._TUI_hideSweep = hideSweep
-        frame.cooldown._TUI_showCountdownText = showCountdownText
-        
-        -- Apply immediately
-        pcall(function()
-            frame.cooldown:SetDrawSwipe(not hideSweep)  -- Invert: hideSweep=true means don't draw
-            frame.cooldown:SetHideCountdownNumbers(true) -- Cooldown text is hidden untill it can be determined if it should show
-        end)
-    end
-    
-    if not IsHighlightEnabled(trackerKey, slotIndex) then
-        frame:Hide()
-        return
-    end
-    
     local slotInfo = GetSlotInfo(trackerKey, slotIndex)
-    
-    -- Check if Layout mode is active
-    local isLayoutMode = false
-    local layoutContainer = _G["TweaksUI_LayoutContainer"]
-    if layoutContainer and layoutContainer:IsShown() then
-        isLayoutMode = true
-    end
-    
-    if not slotInfo then
-        if isLayoutMode then
-            local size = GetHighlightSize(trackerKey, slotIndex, "active")
-            local aspectRatio = GetHighlightAspectRatio(trackerKey, slotIndex, "active")
-            ApplyAspectRatio(frame, size, aspectRatio, trackerKey, slotIndex, "active")
-            frame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-            frame.icon:SetDesaturated(true)
-            frame.cooldown:Clear()
-            if frame.count then frame.count:Hide() end
-            if frame.glowFrame then frame.glowFrame:Hide() end
-            frame:SetAlpha(0.5)
-            frame:Show()
-        else
-            frame:Hide()
-        end
-        return
-    end
-    
-    -- Determine current state based on cooldown
-    local currentState = slotInfo.isActive and "active" or "inactive"
-    local showThisState = GetShowState(trackerKey, slotIndex, currentState)
-    
-    -- During layout mode, always show
-    if isLayoutMode then
-        local size = GetHighlightSize(trackerKey, slotIndex, "active")
-        local aspectRatio = GetHighlightAspectRatio(trackerKey, slotIndex, "active")
-        ApplyAspectRatio(frame, size, aspectRatio, trackerKey, slotIndex, "active")
-        
-        if slotInfo.texture then
-            frame.icon:SetTexture(slotInfo.texture)
-        else
-            frame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-        end
-        
-        if not showThisState then
-            frame.icon:SetDesaturated(true)
-            frame:SetAlpha(0.4)
-        else
-            local saturated = GetHighlightSaturation(trackerKey, slotIndex, currentState)
-            local opacity = GetHighlightOpacity(trackerKey, slotIndex, currentState)
-            frame.icon:SetDesaturated(not saturated)
-            frame:SetAlpha(opacity)
-        end
-        
-        frame.cooldown:Clear()
-        if frame.count then frame.count:Hide() end
-        if frame.glowFrame then frame.glowFrame:Hide() end
-        frame:Show()
-        return
-    end
-    
-    -- NOTE: Don't hide early based on showThisState - we'll do final visibility check at the end
-    -- after confirming cooldown state with GCD threshold
-    
-    -- Get state-specific settings
-    local size = GetHighlightSize(trackerKey, slotIndex, currentState)
-    local opacity = GetHighlightOpacity(trackerKey, slotIndex, currentState)
-    local saturated = GetHighlightSaturation(trackerKey, slotIndex, currentState)
-    local aspectRatio = GetHighlightAspectRatio(trackerKey, slotIndex, currentState)
-    
-    -- Apply size and aspect ratio
-    ApplyAspectRatio(frame, size, aspectRatio, trackerKey, slotIndex, currentState)
-    
-    -- Update icon texture (check for custom override first)
-    local sourceIcon = slotInfo.icon
+    local sourceIcon = slotInfo and slotInfo.icon or {}
     local spellID = sourceIcon.spellID or sourceIcon.SpellID or sourceIcon.spellId
     if not spellID and sourceIcon.GetSpellID then
         pcall(function() spellID = sourceIcon:GetSpellID() end)
@@ -1403,32 +778,6 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
     if not spellID and sourceIcon.trackType == "spell" and sourceIcon.trackID then
         spellID = sourceIcon.trackID
     end
-    
-    -- Check for custom icon texture override (spell ID-based)
-    local customTexture = spellID and GetCustomIconTexture(trackerKey, spellID)
-    if customTexture and customTexture ~= "" then
-        frame.icon:SetTexture(customTexture)
-        frame.icon:SetPoint("TOPLEFT", 0, 0)
-        frame.icon:SetPoint("BOTTOMRIGHT", 0, 0)
-        frame.icon:SetTexCoord(0, 1, 0, 1)
-    elseif slotInfo.texture then
-        frame.icon:SetTexture(slotInfo.texture)
-    else
-        frame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
-    end
-    
-    -- Apply custom icon color (spell ID-based)
-    local customColor = spellID and GetCustomIconColor(trackerKey, spellID)
-    if customColor then
-        frame.icon:SetVertexColor(customColor[1] or 1, customColor[2] or 1, customColor[3] or 1)
-    else
-        frame.icon:SetVertexColor(1, 1, 1)
-    end
-    
-    -- Apply saturation and opacity
-    frame.icon:SetDesaturated(not saturated)
-    frame:SetAlpha(opacity)
-    
     -- =========================================================================
     -- COOLDOWN AND CHARGE UPDATES: Use cached spellID for API calls
     -- The spellID cache is populated outside combat, so we can safely use
@@ -1470,7 +819,194 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
             frame.cooldown:SetCooldownFromDurationObject(sourceCooldown:GetCooldownDuration(), true)
         end)
     end
+
+
+
+    -- Default to "ready" (not on cooldown) - only set to true if we CONFIRM a real cooldown
+    local thisIconOnCooldown = false
     
+    -- Check actual cooldown duration from source cooldown
+    -- NOTE: GetCooldownTimes returns MILLISECONDS
+    pcall(function()
+        if sourceCooldown and sourceCooldown.GetCooldownTimes then
+            local start, duration = sourceCooldown:GetCooldownTimes()
+            
+            if start and duration and type(start) == "number" and type(duration) == "number" and duration > 0 then
+                -- Only count as "on cooldown" if duration > 3000ms (3 sec) - ignore GCD (~1500ms)
+                if duration > GCD_THRESHOLD then
+                    -- Convert ms to seconds for comparison with GetTime()
+                    local startSec = start / 1000
+                    local durationSec = duration / 1000
+                    local remaining = (startSec + durationSec) - GetTime()
+                    if remaining > 0.1 then
+                        thisIconOnCooldown = true
+                    end
+                end
+            end
+        end
+    end)
+    
+    -- Fallback: Try frame's own cooldown
+    if not thisIconOnCooldown then
+        pcall(function()
+            if frame.cooldown and frame.cooldown.GetCooldownTimes then
+                local start, duration = frame.cooldown:GetCooldownTimes()
+                
+                if start and duration and type(start) == "number" and type(duration) == "number" and duration > 0 then
+                    if duration > GCD_THRESHOLD then
+                        local startSec = start / 1000
+                        local durationSec = duration / 1000
+                        local remaining = (startSec + durationSec) - GetTime()
+                        if remaining > 0.1 then
+                            thisIconOnCooldown = true
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    return thisIconOnCooldown
+end
+
+local function ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
+    local frame = highlightFrames[trackerKey][slotIndex]
+    if not frame then return end
+    local showInactive = CooldownHighlights:GetState(trackerKey, "inactive.show." .. slotIndex)
+    local showActive = CooldownHighlights:GetState(trackerKey, "active.show." .. slotIndex)
+    -- Notify dock if this icon is docked
+    local dockAssignment = CooldownHighlights:GetState(trackerKey, "dockAssignment." .. slotIndex)
+    if dockAssignment and TUICD.Docks then
+        TUICD.Docks:NotifyIconUpdate(trackerKey, slotIndex)
+    end
+    
+    -- Determine visibility based on confirmed cooldown state AND tracker visibility
+    local trackerVisible = ShouldHighlightBeVisible(trackerKey)
+    local shouldShow = trackerVisible
+    if shouldShow then
+        if isOnCooldown then
+            -- CONFIRMED on a real cooldown (> GCD) - check if user wants inactive state shown
+            if not showInactive then
+                shouldShow = false
+            end
+        else
+            -- Either ready OR couldn't confirm cooldown - treat as ready
+            -- Check if user wants active state shown
+            if not showActive then
+                shouldShow = false
+            end
+        end
+    end
+    if isOnCooldown then
+        local showCountdownText = GetShouldShowCountdownText(trackerKey, slotIndex)
+        
+        -- Check if this is a GCD cooldown using GetCooldownTimes (returns milliseconds)
+        local isGCD = false
+        if frame.cooldown and frame.cooldown.GetCooldownTimes then
+            pcall(function()
+                local start, duration = frame.cooldown:GetCooldownTimes()
+                if start and duration and duration > 0 and duration <= GCD_THRESHOLD then
+                    isGCD = true
+                end
+            end)
+        end
+        
+        if isGCD then
+            -- This is a GCD, hide the countdown text
+            frame.cooldown.hideCountdownText = true
+            frame.cooldown:SetHideCountdownNumbers(true)
+        else
+            -- Real cooldown, use the showCountdownText setting
+            frame.cooldown.hideCountdownText = not showCountdownText
+            frame.cooldown:SetHideCountdownNumbers(not showCountdownText)
+        end
+    else
+        -- Not on cooldown, hide countdown text
+        frame.cooldown.hideCountdownText = true
+        frame.cooldown:SetHideCountdownNumbers(true)
+    end
+
+    if shouldShow then
+        --Apply correct state's visual settings
+        local actualState = isOnCooldown and "inactive" or "active"
+        local actualOpacity = CooldownHighlights:GetState(trackerKey, actualState .. ".opacity." .. slotIndex) or 1.0
+        local actualSaturated = CooldownHighlights:GetState(trackerKey, actualState .. ".saturated." .. slotIndex)
+        if actualSaturated == nil then actualSaturated = (actualState == "active") end
+        frame:Show()
+        frame:SetAlpha(actualOpacity)
+        frame.icon:SetDesaturated(not actualSaturated)
+        frame.icon:Show()
+    else
+        local showRadialSwipe = CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, isOnCooldown, frame)        
+        -- The conditions above have already determined if the radial should be visible or not        
+        if showRadialSwipe then
+            -- Hide icon and backdrop but keep frame visible for radial swipe
+            frame.icon:Hide()
+            -- Hide backdrop by making it fully transparent
+            if not frame._TUI_useMasque then
+                frame:SetBackdropColor(0, 0, 0, 0)
+                frame:SetBackdropBorderColor(0, 0, 0, 0)
+            end
+            frame:Show()
+        else
+            -- Hide entire frame
+            frame:Hide()
+        end
+    end
+end
+
+function CooldownHighlights:UpdateHighlightFrame(trackerKey, slotIndex)
+    local frame = highlightFrames[trackerKey][slotIndex]
+    if not frame then return end
+    
+    -- Calculate current cooldown state
+    local isOnCooldown = CalculateFrameCooldown(trackerKey, slotIndex)
+    
+    -- Initialize state tracking on first run
+    if not frame._TUI_lastCooldownState then
+        frame._TUI_lastCooldownState = nil  -- nil means unknown/first run
+    end
+    
+    -- Check if state changed (transition detected)
+    local stateChanged = (frame._TUI_lastCooldownState ~= isOnCooldown)
+    
+    -- Early return if no state change (performance optimization)
+    if not stateChanged and frame._TUI_lastCooldownState ~= nil then
+        return  -- No transition, skip update
+    end
+    
+    -- State changed or first run - update frame
+    frame._TUI_lastCooldownState = isOnCooldown
+    
+    -- Always update visibility conditions on state change
+    ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
+    --==========================================
+    -- TODO: charge/count cooldown text, layout mode settings, proc glow, glow frame, 
+    --==========================================
+    
+    local slotInfo = GetSlotInfo(trackerKey, slotIndex) or {}
+    local sourceIcon = slotInfo.icon
+    local sourceCooldown = sourceIcon.Cooldown or sourceIcon.cooldown
+    local spellID = GetCachedSpellID(trackerKey, slotIndex)
+    -- If cache miss (shouldn't happen normally), try direct read (only works outside combat)
+    if not spellID and not InCombatLockdown() then
+        spellID = ExtractSpellID(sourceIcon)
+        -- Update cache while we're at it
+        if spellID then
+            spellIDCache[trackerKey][slotIndex] = spellID
+        end
+    end
+    if not spellID then
+        spellID = sourceIcon.spellID or sourceIcon.SpellID or sourceIcon.spellId
+    end
+    if not spellID and sourceIcon.GetSpellID then
+        pcall(function() spellID = sourceIcon:GetSpellID() end)
+    end
+    -- Fallback for custom tracker icons: they store spellID as trackID when trackType == "spell"
+    if not spellID and sourceIcon.trackType == "spell" and sourceIcon.trackID then
+        spellID = sourceIcon.trackID
+    end
+    frame.secretSpellId = spellID
     -- =========================================================================
     -- CHARGE/COUNT DISPLAY: Copy count/charge text
     -- CRITICAL: No conditionals on returned values - they may be secret
@@ -1533,7 +1069,7 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
     local showGlow = false
     
     -- First, check if per-icon proc glow is enabled (default true)
-    local procGlowEnabled = GetShowProcGlow(trackerKey, slotIndex)
+    local procGlowEnabled = CooldownHighlights:GetState(trackerKey, "showProcGlow." .. slotIndex)
     if procGlowEnabled == nil then procGlowEnabled = true end
     
     if procGlowEnabled then
@@ -1572,7 +1108,6 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
             end)
         end
     end
-    
     -- Apply glow state to our frame
     if frame.glowFrame then
         if showGlow then
@@ -1587,290 +1122,84 @@ local function UpdateHighlightFrame(trackerKey, slotIndex)
             end
         end
     end
-    
-    -- Apply text scale, color, and offset settings
-    local cooldownTextScale = GetCooldownTextScale(trackerKey, slotIndex)
-    local cooldownTextColor = GetCooldownTextColor(trackerKey, slotIndex)
-    local cooldownTextOffsetX = GetCooldownTextOffsetX(trackerKey, slotIndex)
-    local cooldownTextOffsetY = GetCooldownTextOffsetY(trackerKey, slotIndex)
-    local cooldownTextAnchor = GetCooldownTextAnchor(trackerKey, slotIndex)
-    local countTextScale = GetCountTextScale(trackerKey, slotIndex)
-    local countTextColor = GetCountTextColor(trackerKey, slotIndex)
-    local countTextOffsetX = GetCountTextOffsetX(trackerKey, slotIndex)
-    local countTextOffsetY = GetCountTextOffsetY(trackerKey, slotIndex)
-    local countTextAnchor = GetCountTextAnchor(trackerKey, slotIndex)
-    
-    -- Scale, color, and offset cooldown text (countdown numbers on the cooldown spiral)
+
+   
     if frame.cooldown then
-        pcall(function()
-            -- Try to find the countdown text in the cooldown frame
-            local cdText = frame.cooldown.Text or frame.cooldown.text
-            if not cdText then
-                -- Search regions for FontString
-                for i = 1, frame.cooldown:GetNumRegions() do
-                    local region = select(i, frame.cooldown:GetRegions())
-                    if region and region:GetObjectType() == "FontString" then
-                        cdText = region
-                        break
-                    end
-                end
-            end
-            
-            if cdText then
-                if cdText.GetFont then
-                    local fontPath, _, fontFlags = cdText:GetFont()
-                    if fontPath then
-                        local baseSize = 14  -- Base font size for cooldown text
-                        cdText:SetFont(fontPath, baseSize * cooldownTextScale, fontFlags or "OUTLINE")
-                    end
-                end
-                if cdText.SetTextColor then
-                    cdText:SetTextColor(cooldownTextColor[1] or 1, cooldownTextColor[2] or 1, cooldownTextColor[3] or 1, cooldownTextColor[4] or 1)
-                end
-                -- Apply anchor and offset
-                if cdText.ClearAllPoints then
-                    cdText:ClearAllPoints()
-                    cdText:SetPoint(cooldownTextAnchor, frame.cooldown, cooldownTextAnchor, cooldownTextOffsetX, cooldownTextOffsetY)
-                end
-            end
-        end)
-    end
-    
-    -- Scale, color, and offset count text (stack/charge numbers)
-    if frame.count then
-        pcall(function()
-            local fontPath, _, fontFlags = frame.count:GetFont()
-            if fontPath then
-                local baseSize = 12  -- Base font size for count text
-                frame.count:SetFont(fontPath, baseSize * countTextScale, fontFlags or "OUTLINE")
-            end
-            frame.count:SetTextColor(countTextColor[1] or 1, countTextColor[2] or 1, countTextColor[3] or 1, countTextColor[4] or 1)
-            -- Apply anchor and offset
-            frame.count:ClearAllPoints()
-            frame.count:SetPoint(countTextAnchor, frame, countTextAnchor, countTextOffsetX, countTextOffsetY)
-        end)
-    end
-    
-    -- Custom accessibility label
-    if frame.customLabel then
-        if GetLabelEnabled(trackerKey, slotIndex) then
-            local labelText = GetLabelText(trackerKey, slotIndex)
-            local fontSize = GetLabelFontSize(trackerKey, slotIndex)
-            local labelColor = GetLabelColor(trackerKey, slotIndex)
-            local offsetX = GetLabelOffsetX(trackerKey, slotIndex)
-            local offsetY = GetLabelOffsetY(trackerKey, slotIndex)
-            local labelAnchor = GetLabelAnchor(trackerKey, slotIndex)
-            
-            frame.customLabel:SetFont("Fonts\\FRIZQT__.TTF", fontSize, "OUTLINE")
-            frame.customLabel:SetText(labelText)
-            frame.customLabel:SetTextColor(labelColor[1] or 1, labelColor[2] or 1, labelColor[3] or 1, labelColor[4] or 1)
-            frame.customLabel:ClearAllPoints()
-            frame.customLabel:SetPoint(labelAnchor, frame, labelAnchor, offsetX, offsetY)
-            frame.customLabel:Show()
-        else
-            frame.customLabel:Hide()
-        end
-    end
-    
-    -- =========================================================================
-    -- FINAL VISIBILITY: Check cooldown state per-icon and hide/show accordingly
-    -- Only hide if we can CONFIRM this specific icon has a real cooldown > GCD
-    -- Default to SHOWING if we can't determine cooldown state
-    -- =========================================================================
-    local showInactive = GetShowState(trackerKey, slotIndex, "inactive")
-    local showActive = GetShowState(trackerKey, slotIndex, "active")
-    
-    -- Default to "ready" (not on cooldown) - only set to true if we CONFIRM a real cooldown
-    local thisIconOnCooldown = false
-    
-    -- Check actual cooldown duration from source cooldown
-    -- NOTE: GetCooldownTimes returns MILLISECONDS
-    pcall(function()
-        if sourceCooldown and sourceCooldown.GetCooldownTimes then
-            local start, duration = sourceCooldown:GetCooldownTimes()
-            
-            if start and duration and type(start) == "number" and type(duration) == "number" and duration > 0 then
-                -- Only count as "on cooldown" if duration > 3000ms (3 sec) - ignore GCD (~1500ms)
-                if duration > GCD_THRESHOLD then
-                    -- Convert ms to seconds for comparison with GetTime()
-                    local startSec = start / 1000
-                    local durationSec = duration / 1000
-                    local remaining = (startSec + durationSec) - GetTime()
-                    if remaining > 0.1 then
-                        thisIconOnCooldown = true
-                    end
-                end
-            end
-        end
-    end)
-    
-    -- Fallback: Try frame's own cooldown
-    if not thisIconOnCooldown then
-        pcall(function()
-            if frame.cooldown and frame.cooldown.GetCooldownTimes then
-                local start, duration = frame.cooldown:GetCooldownTimes()
-                
-                if start and duration and type(start) == "number" and type(duration) == "number" and duration > 0 then
-                    if duration > GCD_THRESHOLD then
-                        local startSec = start / 1000
-                        local durationSec = duration / 1000
-                        local remaining = (startSec + durationSec) - GetTime()
-                        if remaining > 0.1 then
-                            thisIconOnCooldown = true
-                        end
-                    end
-                end
-            end
-        end)
-    end
-    
-    -- Store state for debugging/tracking
-    iconCooldownState[trackerKey][slotIndex] = thisIconOnCooldown
-    -- Check tracker visibility conditions (combat, group, instance, etc.)
-    local trackerVisible = ShouldHighlightBeVisible(trackerKey)
+        local hideSweep = CooldownHighlights:GetState(trackerKey, "hideSweep." .. slotIndex)  -- Per-icon setting (true=hide, false=show, nil=use tracker default)
 
-    -- Update radial swipe visibility based on display state setting
-    local showRadialSwipe = false
-    if frame.radialSwipe then
-        local radialDisplayState = GetRadialDisplayState(trackerKey, slotIndex)
-        
-        if radialDisplayState == "always" then
-            -- Always show (full texture when ready, animated swipe when on cooldown)
-            showRadialSwipe = true
-        elseif radialDisplayState == "cooldown" then
-            -- Only show during cooldown (animated swipe)
-            showRadialSwipe = thisIconOnCooldown
-        elseif radialDisplayState == "available" then
-            -- Only show when ready/available (full texture)
-            showRadialSwipe = not thisIconOnCooldown
-        elseif radialDisplayState == "never" then
-            -- Never show
-            showRadialSwipe = false
+        -- Handle sweep visibility with proper hierarchy
+        if hideSweep == nil then
+            -- Per-icon not set, check tracker-level hideSweep setting
+            if TUICD.Database then
+                local trackerHideSweep = TUICD.Database:GetTrackerSetting(trackerKey, "hideSweep")
+                hideSweep = (trackerHideSweep == true)  -- Use tracker setting
+            else
+                hideSweep = false  -- Default to showing sweep
+            end
         end
         
-        -- Apply custom texture path if set
-        local texturePath = GetRadialTexturePath(trackerKey, slotIndex)
-        if texturePath and texturePath ~= "" and frame.radialSwipe.SetTexture then
-            frame.radialSwipe:SetTexture(texturePath)
-        end
-        
-        -- Apply color settings
-        local color = GetRadialColor(trackerKey, slotIndex)
-        if color and frame.radialSwipe.SetColor then
-            frame.radialSwipe:SetColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
-        end
-        
-        -- Apply position offset
-        local offsetX = GetRadialOffsetX(trackerKey, slotIndex)
-        local offsetY = GetRadialOffsetY(trackerKey, slotIndex)
-        if frame.radialSwipe.SetOffset then
-            frame.radialSwipe:SetOffset(offsetX, offsetY)
-        end
-        
-        -- Apply rotation
-        local rotation = GetRadialRotation(trackerKey, slotIndex)
-        if frame.radialSwipe.SetRotation then
-            frame.radialSwipe:SetRotation(rotation)
-        end
-        
-        if showRadialSwipe then
-            frame.radialSwipe:Show()
-        else
-            frame.radialSwipe:Hide()
-        end
+        -- Apply immediately
+        pcall(function()
+            frame.cooldown:SetDrawSwipe(not hideSweep)  -- Invert: hideSweep=true means don't draw
+            --frame.cooldown:SetHideCountdownNumbers(true) -- Cooldown text is hidden untill it can be determined if it should show
+            frame.cooldown:SetHideCountdownNumbers(false)
+        end)
     end
     
-    -- Notify dock if this icon is docked
-    local dockAssignment = GetDockAssignment(trackerKey, slotIndex)
-    if dockAssignment and TUICD.Docks then
-        TUICD.Docks:NotifyIconUpdate(trackerKey, slotIndex)
+   
+    
+    -- Check if Layout mode is active
+    local isLayoutMode = false
+    local layoutContainer = _G["TweaksUI_LayoutContainer"]
+    if layoutContainer and layoutContainer:IsShown() then
+        isLayoutMode = true
     end
     
-    -- Determine visibility based on confirmed cooldown state AND tracker visibility
-    local shouldShow = trackerVisible
-    if shouldShow then
-        if thisIconOnCooldown then
-            -- CONFIRMED on a real cooldown (> GCD) - check if user wants inactive state shown
-            if not showInactive then
-                shouldShow = false
-            end
-        else
-            -- Either ready OR couldn't confirm cooldown - treat as ready
-            -- Check if user wants active state shown
-            if not showActive then
-                shouldShow = false
-            end
-        end
-    end
-    if thisIconOnCooldown then
-        local showCountdownText = GetShouldShowCountdownText(trackerKey, slotIndex)
-        
-        -- Check if this is a GCD cooldown using GetCooldownTimes (returns milliseconds)
-        local isGCD = false
-        if frame.cooldown and frame.cooldown.GetCooldownTimes then
-            pcall(function()
-                local start, duration = frame.cooldown:GetCooldownTimes()
-                if start and duration and duration > 0 and duration <= GCD_THRESHOLD then
-                    isGCD = true
-                end
-            end)
-        end
-        
-        if isGCD then
-            -- This is a GCD, hide the countdown text
-            frame.cooldown.hideCountdownText = true
-            frame.cooldown:SetHideCountdownNumbers(true)
-        else
-            -- Real cooldown, use the showCountdownText setting
-            frame.cooldown.hideCountdownText = not showCountdownText
-            frame.cooldown:SetHideCountdownNumbers(not showCountdownText)
-        end
-    else
-        -- Not on cooldown, hide countdown text
-        frame.cooldown.hideCountdownText = true
-        frame.cooldown:SetHideCountdownNumbers(true)
-    end
-
-    if shouldShow then
-        -- Apply correct state's visual settings
-        local actualState = thisIconOnCooldown and "inactive" or "active"
-        local actualOpacity = GetHighlightOpacity(trackerKey, slotIndex, actualState)
-        local actualSaturated = GetHighlightSaturation(trackerKey, slotIndex, actualState)
-        frame:SetAlpha(actualOpacity)
-        frame.icon:SetDesaturated(not actualSaturated)
-        frame.icon:Show()
-        -- Show backdrop (if not using Masque)
-        if customTexture and customTexture ~= "" then
-            frame:SetBackdropColor(0, 0, 0, 0)
-            frame:SetBackdropBorderColor(0, 0, 0, 0)
-        elseif not frame._TUI_useMasque then
-            frame:SetBackdropColor(0, 0, 0, 0.6)
-            frame:SetBackdropBorderColor(0, 0, 0, 1)
-        end
-        frame:Show()
-    else
-        -- The conditions above have already determined if the radial should be visible or not        
-        if showRadialSwipe then
-            -- Hide icon and backdrop but keep frame visible for radial swipe
-            frame.icon:Hide()
-            -- Hide backdrop by making it fully transparent
-            if not frame._TUI_useMasque then
-                frame:SetBackdropColor(0, 0, 0, 0)
-                frame:SetBackdropBorderColor(0, 0, 0, 0)
-            end
+    if not slotInfo then
+        if isLayoutMode then
+            frame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+            frame.icon:SetDesaturated(true)
+            frame.cooldown:Clear()
+            if frame.count then frame.count:Hide() end
+            if frame.glowFrame then frame.glowFrame:Hide() end
+            frame:SetAlpha(0.5)
             frame:Show()
         else
-            -- Hide entire frame
             frame:Hide()
         end
+        return
+    end
+    
+    -- Determine current state based on cooldown
+    local currentState = slotInfo.isActive and "active" or "inactive"
+    local showThisState = CooldownHighlights:GetState(trackerKey, currentState .. ".show." .. slotIndex)
+    
+    -- During layout mode, always show
+    if isLayoutMode then
+        if not showThisState then
+            frame.icon:SetDesaturated(true)
+            frame:SetAlpha(0.4)
+        else
+            local saturated = CooldownHighlights:GetState(trackerKey, currentState .. ".saturated." .. slotIndex)
+            if saturated == nil then saturated = (currentState == "active") end
+            local opacity = CooldownHighlights:GetState(trackerKey, currentState .. ".opacity." .. slotIndex) or 1.0
+            frame.icon:SetDesaturated(not saturated)
+            frame:SetAlpha(opacity)
+        end
+        
+        frame.cooldown:Clear()
+        if frame.count then frame.count:Hide() end
+        if frame.glowFrame then frame.glowFrame:Hide() end
+        frame:Show()
+        return
     end
 end
 
-local function UpdateAllHighlights(trackerKey)
+function CooldownHighlights:UpdateAllHighlights(trackerKey)
     local db = GetDB(trackerKey)
-    if not db then return end
     
     local inCombat = InCombatLockdown()
+    if not db then return end
     
     for slotIndex, enabled in pairs(db.enabled) do
         if enabled then
@@ -1882,11 +1211,35 @@ local function UpdateAllHighlights(trackerKey)
             end
             -- Only update if frame exists
             if highlightFrames[trackerKey][slotIndex] then
-                local success, err = pcall(UpdateHighlightFrame, trackerKey, slotIndex)
-                if not success and debugMode then
-                    dprint("UpdateHighlightFrame error:", trackerKey, slotIndex, tostring(err))
-                end
+                local success, err = pcall(CooldownHighlights.UpdateHighlightFrame, CooldownHighlights, trackerKey, slotIndex)
             end
+        end
+    end
+end
+
+-- Throttled version of UpdateAllHighlights - limits update frequency per tracker
+function CooldownHighlights:UpdateAllHighlightsThrottled(trackerKey)
+    local now = GetTime()
+    local lastUpdate = throttleState.lastUpdate[trackerKey] or 0
+    local timeSinceLastUpdate = now - lastUpdate
+    
+    -- If enough time has passed, update immediately
+    if timeSinceLastUpdate >= throttleState.throttleDelay then
+        throttleState.lastUpdate[trackerKey] = now
+        throttleState.pendingUpdate[trackerKey] = false
+        CooldownHighlights:UpdateAllHighlights(trackerKey)
+    else
+        -- Too soon - schedule a delayed update if not already pending
+        if not throttleState.pendingUpdate[trackerKey] then
+            throttleState.pendingUpdate[trackerKey] = true
+            local remainingDelay = throttleState.throttleDelay - timeSinceLastUpdate
+            C_Timer.After(remainingDelay, function()
+                if throttleState.pendingUpdate[trackerKey] then
+                    throttleState.lastUpdate[trackerKey] = GetTime()
+                    throttleState.pendingUpdate[trackerKey] = false
+                    CooldownHighlights:UpdateAllHighlights(trackerKey)
+                end
+            end)
         end
     end
 end
@@ -1917,10 +1270,13 @@ local function CreateLayoutWrapper(trackerKey, slotIndex)
         
         onPositionChanged = function(self, point, relFrame, relPoint, x, y)
             -- Skip if docked - dock controls position
-            if GetDockAssignment(trackerKey, slotIndex) then return end
+            if CooldownHighlights:GetState(trackerKey, "dockAssignment." .. slotIndex) then return end
             frame:ClearAllPoints()
             frame:SetPoint(point, UIParent, point, x, y)
-            SetHighlightPosition(trackerKey, slotIndex, point, point, x, y)
+            CooldownHighlights:UpdateState(trackerKey, { slotIndex = slotIndex }, {
+                statePath = "positions." .. slotIndex,
+                value = { point = point, relPoint = relPoint, x = x, y = y }
+            })
         end,
         
         GetPosition = function(self)
@@ -1930,7 +1286,7 @@ local function CreateLayoutWrapper(trackerKey, slotIndex)
         
         SetPosition = function(self, point, relFrame, relPoint, x, y)
             -- Skip if docked - dock controls position
-            if GetDockAssignment(trackerKey, slotIndex) then return end
+            if CooldownHighlights:GetState(trackerKey, "dockAssignment." .. slotIndex) then return end
             frame:ClearAllPoints()
             frame:SetPoint(point, relFrame or UIParent, relPoint or point, x or 0, y or 0)
             if self.onPositionChanged then
@@ -2074,7 +1430,6 @@ local function RegisterWithLayout(trackerKey, slotIndex)
                 end
             end,
         })
-        dprint("Registered with Layout:", trackerKey, slotIndex)
     end
     
     return wrapper
@@ -2090,7 +1445,6 @@ local function UnregisterFromLayout(trackerKey, slotIndex)
     end
     
     layoutWrappers[trackerKey][slotIndex] = nil
-    dprint("Unregistered from Layout:", trackerKey, slotIndex)
 end
 
 local function RegisterAllWithLayout(trackerKey)
@@ -2107,485 +1461,468 @@ local function RegisterAllWithLayout(trackerKey)
 end
 
 -- ============================================================================
--- UPDATE SYSTEM - Simple OnUpdate for reliable updates
--- ============================================================================
-
-local updateFrames = {}  -- [trackerKey] = frame
-
-local function StartUpdateTicker(trackerKey)
-    if updateFrames[trackerKey] then return end
-    
-    local updateFrame = CreateFrame("Frame")
-    
-    updateFrame:SetScript("OnUpdate", function(self, elapsed)
-        pcall(UpdateAllHighlights, trackerKey)
-    end)
-    
-    updateFrames[trackerKey] = updateFrame
-    dprint("Started OnUpdate:", trackerKey)
-end
-
-local function StopUpdateTicker(trackerKey)
-    if updateFrames[trackerKey] then
-        updateFrames[trackerKey]:SetScript("OnUpdate", nil)
-        updateFrames[trackerKey] = nil
-        dprint("Stopped OnUpdate:", trackerKey)
-    end
-end
-
--- ============================================================================
 -- TRACKER HIDE ENFORCEMENT
 -- ============================================================================
 
-local hideEnforcementTickers = {}
+local hideEnforcementHooks = {}
 
 local function StartHideEnforcement(trackerKey)
-    if hideEnforcementTickers[trackerKey] then return end
+    if hideEnforcementHooks[trackerKey] then return end
     
-    hideEnforcementTickers[trackerKey] = C_Timer.NewTicker(0.2, function()
-        if not IsTrackerHidden(trackerKey) then
-            StopHideEnforcement(trackerKey)
+    local viewer = GetViewer(trackerKey)
+    if not viewer then return end
+    
+    -- Hook Show() to prevent external code from showing the viewer
+    local originalShow = viewer.Show
+    viewer.Show = function(self)
+        if CooldownHighlights:GetState(trackerKey, "hideTracker") then
+            -- Silently ignore Show() calls when hideTracker is enabled
             return
         end
-        
-        local viewer = GetViewer(trackerKey)
-        if viewer then
-            -- Use alpha instead of Hide to avoid secret value issues on re-show
-            if viewer:GetAlpha() > 0 then
-                viewer:SetAlpha(0)
-                viewer:EnableMouse(false)
-            end
+        originalShow(self)
+    end
+    
+    -- Hook SetAlpha() to prevent external code from changing alpha
+    local originalSetAlpha = viewer.SetAlpha
+    viewer.SetAlpha = function(self, alpha)
+        if CooldownHighlights:GetState(trackerKey, "hideTracker") then
+            -- Force alpha to 0 when hideTracker is enabled
+            originalSetAlpha(self, 0)
+            return
         end
-    end)
+        originalSetAlpha(self, alpha)
+    end
+    
+    hideEnforcementHooks[trackerKey] = {
+        originalShow = originalShow,
+        originalSetAlpha = originalSetAlpha
+    }
 end
 
 local function StopHideEnforcement(trackerKey)
-    if hideEnforcementTickers[trackerKey] then
-        hideEnforcementTickers[trackerKey]:Cancel()
-        hideEnforcementTickers[trackerKey] = nil
+    if not hideEnforcementHooks[trackerKey] then return end
+    
+    local viewer = GetViewer(trackerKey)
+    if viewer then
+        -- Restore original methods
+        viewer.Show = hideEnforcementHooks[trackerKey].originalShow
+        viewer.SetAlpha = hideEnforcementHooks[trackerKey].originalSetAlpha
+    end
+    
+    hideEnforcementHooks[trackerKey] = nil
+end
+
+function CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, isOnCooldown, frame)
+    -- Update radial swipe visibility based on display state setting
+    local showRadialSwipe = false
+    if frame.radialSwipe then
+        local radialDisplayState = CooldownHighlights:GetState(trackerKey, "radialSwipe.displayState." .. slotIndex) or "always"
+        
+        if radialDisplayState == "always" then
+            -- Always show (full texture when ready, animated swipe when on cooldown)
+            showRadialSwipe = true
+        elseif radialDisplayState == "cooldown" then
+            -- Only show during cooldown (animated swipe)
+            showRadialSwipe = isOnCooldown
+        elseif radialDisplayState == "available" then
+            -- Only show when ready/available (full texture)
+            showRadialSwipe = not isOnCooldown
+        elseif radialDisplayState == "never" then
+            -- Never show
+            showRadialSwipe = false
+        end
+        
+        
+        if showRadialSwipe then
+            frame.radialSwipe:Show()
+        else
+            frame.radialSwipe:Hide()
+        end
+    end
+    return showRadialSwipe
+end
+
+function CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotIndex, db)
+    local isOnCooldown = CalculateFrameCooldown(trackerKey, slotIndex)
+    local enabled = CooldownHighlights:GetState(trackerKey, "enabled." .. slotIndex)
+    CooldownHighlights:EnableHighlight(trackerKey, slotIndex, enabled)
+
+    --===========================
+    -- Apply RadialSwipe settings
+    --===========================
+    --apply modified texture
+    local frame = highlightFrames[trackerKey] and highlightFrames[trackerKey][slotIndex]
+    if (not frame) then
+        return
+    end
+    if frame and frame.radialSwipe and frame.radialSwipe.SetTexture then
+        local path = db and db.radialSwipe.texturePath[slotIndex] or ""
+        if path and path ~= "" then
+            frame.radialSwipe:SetTexture(path)
+        else
+            -- Reset to default when cleared
+            frame.radialSwipe:SetTexture("Interface\\AddOns\\TweaksUI_Cooldowns\\Media\\Textures\\square_outline.tga")
+        end
+    end
+    --Apply Size
+    local radialScale = CooldownHighlights:GetState(trackerKey, "radialSwipe.scale." .. slotIndex) or 1.0
+    local width, height = frame:GetSize()
+    local swipeSize = math.max(width, height)  -- Use the larger dimension as base
+    if frame.radialSwipe.SetSize then
+        frame.radialSwipe:SetSize(swipeSize * radialScale, swipeSize * radialScale)
+    end
+    -- Apply color
+    local color = CooldownHighlights:GetState(trackerKey, "radialSwipe.color." .. slotIndex) or {1, 1, 1, 1}
+    if color and frame.radialSwipe.SetColor then
+        frame.radialSwipe:SetColor(color[1] or 1, color[2] or 1, color[3] or 1, color[4] or 1)
+    end
+    -- Apply position offset
+    local offsetX = CooldownHighlights:GetState(trackerKey, "radialSwipe.offsetX." .. slotIndex) or 0
+    local offsetY = CooldownHighlights:GetState(trackerKey, "radialSwipe.offsetY." .. slotIndex) or 0
+    if frame.radialSwipe.SetOffset then
+        frame.radialSwipe:SetOffset(offsetX, offsetY)
+    end
+    -- Apply rotation
+    local rotation = CooldownHighlights:GetState(trackerKey, "radialSwipe.rotation." .. slotIndex) or 0
+    if frame.radialSwipe.SetRotation then
+        frame.radialSwipe:SetRotation(rotation)
+    end
+
+
+    CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, isOnCooldown, frame)
+
+    --===========================
+    -- Apply Spell Icon settings
+    --===========================
+    local slotInfo = GetSlotInfo(trackerKey, slotIndex) or {}
+    local sourceIcon = slotInfo.icon or {}
+    local spellID = sourceIcon and (sourceIcon.spellID or sourceIcon.SpellID or sourceIcon.spellId)
+    if not spellID and sourceIcon and sourceIcon.GetSpellID then
+        pcall(function() spellID = sourceIcon:GetSpellID() end)
+    end
+    -- Fallback for custom tracker icons: they store spellID as trackID when trackType == "spell"
+    if not spellID and sourceIcon.trackType == "spell" and sourceIcon.trackID then
+        spellID = sourceIcon.trackID
+    end
+    -- Check for custom icon texture override (spell ID-based)
+    local customTexture = spellID and CooldownHighlights:GetState(trackerKey, "customIconTexture." .. tostring(spellID))
+    if customTexture and customTexture ~= "" then
+        frame.icon:SetTexture(customTexture)
+        frame.icon:SetPoint("TOPLEFT", 0, 0)
+        frame.icon:SetPoint("BOTTOMRIGHT", 0, 0)
+        frame.icon:SetTexCoord(0, 1, 0, 1)
+        frame:SetBackdropColor(0, 0, 0, 0)
+        frame:SetBackdropBorderColor(0, 0, 0, 0)
+    elseif slotInfo.texture then
+        frame.icon:SetTexture(slotInfo.texture)
+    else
+        frame.icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+    end
+
+    -- Apply custom icon color (spell ID-based)
+    local customColor = spellID and CooldownHighlights:GetState(trackerKey, "customIconColor." .. tostring(spellID))
+    if customColor then
+        frame.icon:SetVertexColor(customColor[1] or 1, customColor[2] or 1, customColor[3] or 1)
+    else
+        frame.icon:SetVertexColor(1, 1, 1)
+    end
+
+    local size = CooldownHighlights:GetState(trackerKey, "active.size." .. slotIndex) or DEFAULT_SIZE
+    frame:SetSize(size, size)
+    
+    -- Determine actual state and visibility
+    local actualState = isOnCooldown and "inactive" or "active"
+    local showInactive = CooldownHighlights:GetState(trackerKey, "inactive.show." .. slotIndex)
+    local showActive = CooldownHighlights:GetState(trackerKey, "active.show." .. slotIndex)
+    local shouldShowIcon = (isOnCooldown and showInactive) or (not isOnCooldown and showActive)
+    if shouldShowIcon then
+        -- Apply state-specific visual settings and show
+        local actualOpacity = CooldownHighlights:GetState(trackerKey, actualState .. ".opacity." .. slotIndex) or 1.0
+        local actualSaturated = CooldownHighlights:GetState(trackerKey, actualState .. ".saturated." .. slotIndex)
+        if actualSaturated == nil then actualSaturated = (actualState == "active") end
+
+        frame:SetAlpha(actualOpacity)
+        frame.icon:SetDesaturated(not actualSaturated)
+        frame.icon:Show()
+    else
+        -- Hide icon when show setting is disabled for this state
+        frame.icon:Hide()
+    end
+
+
+
+
+
+
+
+
+    --TODO: Implement the settings that only display when a spell is on cooldown (cooldown size ect.)
+    
+    -- Apply text scale, color, and offset settings
+    -- local cooldownTextScale = CooldownHighlights:GetState(trackerKey, "cooldownTextScale." .. slotIndex) or 1.0
+    -- local cooldownTextColor = CooldownHighlights:GetState(trackerKey, "cooldownTextColor." .. slotIndex) or {1, 1, 1, 1}
+    -- local cooldownTextOffsetX = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetX." .. slotIndex) or 0
+    -- local cooldownTextOffsetY = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetY." .. slotIndex) or 0
+    -- local cooldownTextAnchor = CooldownHighlights:GetState(trackerKey, "cooldownTextAnchor." .. slotIndex) or "CENTER"
+    -- local countTextScale = CooldownHighlights:GetState(trackerKey, "countTextScale." .. slotIndex) or 1.0
+    -- local countTextColor = CooldownHighlights:GetState(trackerKey, "countTextColor." .. slotIndex) or {1, 1, 1, 1}
+    -- local countTextOffsetX = CooldownHighlights:GetState(trackerKey, "countTextOffsetX." .. slotIndex) or 0
+    -- local countTextOffsetY = CooldownHighlights:GetState(trackerKey, "countTextOffsetY." .. slotIndex) or 0
+    -- local countTextAnchor = CooldownHighlights:GetState(trackerKey, "countTextAnchor." .. slotIndex) or "BOTTOMRIGHT"
+    
+    -- -- Scale, color, and offset cooldown text (countdown numbers on the cooldown spiral)
+    -- if frame.cooldown then
+    --     pcall(function()
+    --         -- Try to find the countdown text in the cooldown frame
+    --         local cdText = frame.cooldown.Text or frame.cooldown.text
+    --         if not cdText then
+    --             -- Search regions for FontString
+    --             for i = 1, frame.cooldown:GetNumRegions() do
+    --                 local region = select(i, frame.cooldown:GetRegions())
+    --                 if region and region:GetObjectType() == "FontString" then
+    --                     cdText = region
+    --                     break
+    --                 end
+    --             end
+    --         end
+            
+    --         if cdText then
+    --             if cdText.GetFont then
+    --                 local fontPath, _, fontFlags = cdText:GetFont()
+    --                 if fontPath then
+    --                     local baseSize = 14  -- Base font size for cooldown text
+    --                     cdText:SetFont(fontPath, baseSize * cooldownTextScale, fontFlags or "OUTLINE")
+    --                 end
+    --             end
+    --             if cdText.SetTextColor then
+    --                 cdText:SetTextColor(cooldownTextColor[1] or 1, cooldownTextColor[2] or 1, cooldownTextColor[3] or 1, cooldownTextColor[4] or 1)
+    --             end
+    --             -- Apply anchor and offset
+    --             if cdText.ClearAllPoints then
+    --                 cdText:ClearAllPoints()
+    --                 cdText:SetPoint(cooldownTextAnchor, frame.cooldown, cooldownTextAnchor, cooldownTextOffsetX, cooldownTextOffsetY)
+    --             end
+    --         end
+    --     end)
+    -- end
+    
+    -- -- Scale, color, and offset count text (stack/charge numbers)
+    -- if frame.count then
+    --     pcall(function()
+    --         local fontPath, _, fontFlags = frame.count:GetFont()
+    --         if fontPath then
+    --             local baseSize = 12  -- Base font size for count text
+    --             frame.count:SetFont(fontPath, baseSize * countTextScale, fontFlags or "OUTLINE")
+    --         end
+    --         frame.count:SetTextColor(countTextColor[1] or 1, countTextColor[2] or 1, countTextColor[3] or 1, countTextColor[4] or 1)
+    --         -- Apply anchor and offset
+    --         frame.count:ClearAllPoints()
+    --         frame.count:SetPoint(countTextAnchor, frame, countTextAnchor, countTextOffsetX, countTextOffsetY)
+    --     end)
+    -- end
+    
+    -- -- Custom accessibility label
+    -- if frame.customLabel then
+    --     if CooldownHighlights:GetState(trackerKey, "labelEnabled." .. slotIndex) then
+    --         local labelText = CooldownHighlights:GetState(trackerKey, "labelText." .. slotIndex) or ""
+    --         local fontSize = CooldownHighlights:GetState(trackerKey, "labelFontSize." .. slotIndex) or 14
+    --         local labelColor = CooldownHighlights:GetState(trackerKey, "labelColor." .. slotIndex) or {1, 1, 1, 1}
+    --         local offsetX = CooldownHighlights:GetState(trackerKey, "labelOffsetX." .. slotIndex) or 0
+    --         local offsetY = CooldownHighlights:GetState(trackerKey, "labelOffsetY." .. slotIndex) or 0
+    --         local labelAnchor = CooldownHighlights:GetState(trackerKey, "labelAnchor." .. slotIndex) or "CENTER"
+            
+    --         frame.customLabel:SetFont("Fonts\\FRIZQT__.TTF", fontSize, "OUTLINE")
+    --         frame.customLabel:SetText(labelText)
+    --         frame.customLabel:SetTextColor(labelColor[1] or 1, labelColor[2] or 1, labelColor[3] or 1, labelColor[4] or 1)
+    --         frame.customLabel:ClearAllPoints()
+    --         frame.customLabel:SetPoint(labelAnchor, frame, labelAnchor, offsetX, offsetY)
+    --         frame.customLabel:Show()
+    --     else
+    --         frame.customLabel:Hide()
+    --     end
+    -- end
+
+end
+
+--==================================================
+-- State Management
+--==================================================
+
+-- Helper to resolve ambiguous key (string vs number)
+-- Checks if numeric or string version exists, or decides which to use for new keys
+-- If both exist (duplicate), consolidates to NUMERIC key and removes string key
+local function resolveKey(tbl, keyStr)
+    local numKey = tonumber(keyStr)
+    local hasNumKey = numKey ~= nil and tbl[numKey] ~= nil
+    local hasStrKey = tbl[keyStr] ~= nil
+    
+    -- If BOTH keys exist (duplicate from old data), consolidate to numeric key
+    if hasNumKey and hasStrKey then
+        -- Remove the string key, keep numeric key
+        tbl[keyStr] = nil
+        return numKey
+    end
+    
+    -- Try numeric key first if it's a valid number and exists
+    if hasNumKey then
+        return numKey
+    end
+    
+    -- Try string key - if exists, migrate to numeric if possible
+    if hasStrKey then
+        if numKey ~= nil then
+            -- Migrate to numeric key for consistency
+            tbl[numKey] = tbl[keyStr]
+            tbl[keyStr] = nil
+            return numKey
+        end
+        return keyStr  -- Can't convert to number, keep as string
+    end
+    
+    -- Neither exists - use numeric key for new entries if possible
+    if numKey ~= nil then
+        return numKey
+    end
+    return keyStr  -- Not a number, use string
+end
+
+
+-- Set nested value using table of keys
+local function accessNestedValue(tbl, path, value, action)
+    local keys = {}
+    for key in string.gmatch(path, "[^.]+") do
+        table.insert(keys, key)
+    end
+    local current = tbl
+    for i = 1, #keys - 1 do
+        local keyStr = keys[i]
+        local key = resolveKey(current, keyStr)
+        
+        if current[key] == nil then
+            current[key] = {}
+        end
+        current = current[key]
+    end
+    
+    -- Handle the final key with resolution
+    local finalKey = resolveKey(current, keys[#keys])
+    if (action == 'set') then
+        current[finalKey] = value
+    elseif (action == 'get') then
+        return current[finalKey]
     end
 end
 
--- ============================================================================
--- PUBLIC API
--- ============================================================================
+function CooldownHighlights:GetSlotIndexFromSpellID(trackerKey, spellID)
+    local db = GetDB(trackerKey) or {}
+    for slotIndex, enabled in pairs(db.enabled) do
+        if enabled and highlightFrames[trackerKey][slotIndex] then
+            -- Check if this slot's spellID matches
+            local cachedSpellID = GetCachedSpellID(trackerKey, slotIndex)
+            if cachedSpellID == spellID then
+                return slotIndex
+            end
+        end
+    end
+    return -1
+end
+
+function CooldownHighlights:UpdateState(trackerKey, identifier, payload)
+    local db = GetDB(trackerKey)
+    if not db then return end
+    
+    local slotIndex = (
+            identifier.spellId
+            and CooldownHighlights:GetSlotIndexFromSpellID(trackerKey, identifier.spellId)
+        )
+        or identifier.slotIndex
+    accessNestedValue(db, payload.statePath, payload.value, "set")
+
+    
+    -- Check if this is a hideTracker setting change (tracker-level, not per-slot)
+    if string.find(payload.statePath, "hideTracker") then
+        self:ApplyTrackerVisibility(trackerKey)
+    end
+
+    if (string.find(payload.statePath, "hidden")) then
+        -- Save database to ensure changes persist
+        if TUICD.Database and TUICD.Database.SetModuleSettings then
+            TUICD.Database:SetModuleSettings(TUICD.MODULE_IDS.COOLDOWNS, TUICD.Cooldowns:GetSettings())
+        end
+        
+        -- Refresh the tracker layout to apply alpha=0 on hidden icons
+        if TUICD.Cooldowns and TUICD.Cooldowns.RefreshTrackerLayout then
+            TUICD.Cooldowns.RefreshTrackerLayout(trackerKey)
+        end
+    end
+    
+    -- Check if this is a dock assignment change (per-icon)
+    if slotIndex and string.find(payload.statePath, "dockAssignment") then
+        if TUICD.Docks then
+            local dockIndex = payload.value
+            if dockIndex and dockIndex >= 1 and dockIndex <= 4 then
+                TUICD.Docks:AssignIcon(dockIndex, trackerKey, slotIndex)
+            else
+                -- Unassign from all docks
+                for i = 1, 4 do
+                    TUICD.Docks:UnassignIcon(i, trackerKey, slotIndex)
+                end
+            end
+        end
+        
+        -- Refresh layout mode overlay (show/hide based on dock status)
+        if TUICD.LayoutMode and TUICD.LayoutMode.RefreshPerIconOverlay then
+            TUICD.LayoutMode:RefreshPerIconOverlay(trackerKey, slotIndex)
+        end
+    end
+    
+    if (slotIndex) then
+        CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotIndex, db)
+    end
+end
+
+
+function CooldownHighlights:GetState(trackerKey, path, log)
+    local db = GetDB(trackerKey)
+    if not db then return end
+    local value = accessNestedValue(db, path, nil, "get")
+    return value
+end
+
+
+
 
 function CooldownHighlights:EnableHighlight(trackerKey, slotIndex, enabled)
-    SetHighlightEnabled(trackerKey, slotIndex, enabled)
-    
     if enabled then
         -- Only create frames outside combat to avoid taint
         if not highlightFrames[trackerKey][slotIndex] and not InCombatLockdown() then
             CreateHighlightFrame(trackerKey, slotIndex)
+            
         end
         if highlightFrames[trackerKey][slotIndex] then
             RegisterWithLayout(trackerKey, slotIndex)
             
             -- If this icon has a dock assignment, reparent to dock
-            local dockAssignment = GetDockAssignment(trackerKey, slotIndex)
+            local dockAssignment = CooldownHighlights:GetState(trackerKey, "dockAssignment." .. slotIndex)
             if dockAssignment and TUICD.Docks then
                 TUICD.Docks:AssignIcon(dockAssignment, trackerKey, slotIndex)
             end
-        end
-        
-        -- Start ticker if needed
-        local db = GetDB(trackerKey)
-        local hasEnabled = false
-        for _, e in pairs(db.enabled) do
-            if e then hasEnabled = true break end
-        end
-        if hasEnabled then
-            StartUpdateTicker(trackerKey)
+            
+            -- Show the frame when re-enabling
+            highlightFrames[trackerKey][slotIndex]:Show()
         end
     else
         if highlightFrames[trackerKey][slotIndex] then
             highlightFrames[trackerKey][slotIndex]:Hide()
         end
         UnregisterFromLayout(trackerKey, slotIndex)
-        
-        -- Stop ticker if no highlights enabled
-        local db = GetDB(trackerKey)
-        local hasEnabled = false
-        for _, e in pairs(db.enabled) do
-            if e then hasEnabled = true break end
-        end
-        if not hasEnabled then
-            StopUpdateTicker(trackerKey)
-        end
-    end
-    
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetShowState(trackerKey, slotIndex, state, show)
-    SetShowState(trackerKey, slotIndex, state, show)
-end
-
-function CooldownHighlights:GetShowState(trackerKey, slotIndex, state)
-    return GetShowState(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:SetSize(trackerKey, slotIndex, state, size)
-    SetHighlightSize(trackerKey, slotIndex, state, size)
-end
-
-function CooldownHighlights:GetSize(trackerKey, slotIndex, state)
-    return GetHighlightSize(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:GetRadialDisplayState(trackerKey, slotIndex)
-    return GetRadialDisplayState(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialDisplayState(trackerKey, slotIndex, state)
-    SetRadialDisplayState(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:GetRadialTexturePath(trackerKey, slotIndex)
-    return GetRadialTexturePath(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialTexturePath(trackerKey, slotIndex, path)
-    SetRadialTexturePath(trackerKey, slotIndex, path)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetRadialColor(trackerKey, slotIndex)
-    return GetRadialColor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialColor(trackerKey, slotIndex, color)
-    SetRadialColor(trackerKey, slotIndex, color)
-end
-
-function CooldownHighlights:GetRadialScale(trackerKey, slotIndex)
-    return GetRadialScale(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialScale(trackerKey, slotIndex, scale)
-    SetRadialScale(trackerKey, slotIndex, scale)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetRadialOffsetX(trackerKey, slotIndex)
-    return GetRadialOffsetX(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialOffsetX(trackerKey, slotIndex, offset)
-    SetRadialOffsetX(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetRadialOffsetY(trackerKey, slotIndex)
-    return GetRadialOffsetY(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialOffsetY(trackerKey, slotIndex, offset)
-    SetRadialOffsetY(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetRadialRotation(trackerKey, slotIndex)
-    return GetRadialRotation(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetRadialRotation(trackerKey, slotIndex, rotation)
-    SetRadialRotation(trackerKey, slotIndex, rotation)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
--- Custom icon texture (spell ID-based)
-function CooldownHighlights:GetCustomIconColor(trackerKey, spellID)
-    return GetCustomIconColor(trackerKey, spellID)
-end
-
-function CooldownHighlights:SetCustomIconColor(trackerKey, spellID, color)
-    SetCustomIconColor(trackerKey, spellID, color)
-    -- Trigger update for all enabled slots with this spell ID
-    for slotIndex = 1, 12 do
-        if self:IsEnabled(trackerKey, slotIndex) then
-            UpdateHighlightFrame(trackerKey, slotIndex)
-        end
     end
 end
 
-function CooldownHighlights:GetCustomIconTexture(trackerKey, spellID)
-    return GetCustomIconTexture(trackerKey, spellID)
-end
 
-function CooldownHighlights:SetCustomIconTexture(trackerKey, spellID, texturePath)
-    SetCustomIconTexture(trackerKey, spellID, texturePath)
-    
-    -- Update all highlight frames to apply the new texture immediately
-    local db = GetDB(trackerKey)
-    if not db then return end
-    
-    for slotIndex, enabled in pairs(db.enabled) do
-        if enabled then
-            UpdateHighlightFrame(trackerKey, slotIndex)
-        end
-    end
-end
-
-function CooldownHighlights:SetOpacity(trackerKey, slotIndex, state, opacity)
-    SetHighlightOpacity(trackerKey, slotIndex, state, opacity)
-end
-
-function CooldownHighlights:GetOpacity(trackerKey, slotIndex, state)
-    return GetHighlightOpacity(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:SetSaturation(trackerKey, slotIndex, state, saturated)
-    SetHighlightSaturation(trackerKey, slotIndex, state, saturated)
-end
-
-function CooldownHighlights:GetSaturation(trackerKey, slotIndex, state)
-    return GetHighlightSaturation(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:SetAspectRatio(trackerKey, slotIndex, state, ratio)
-    SetHighlightAspectRatio(trackerKey, slotIndex, state, ratio)
-end
-
-function CooldownHighlights:GetAspectRatio(trackerKey, slotIndex, state)
-    return GetHighlightAspectRatio(trackerKey, slotIndex, state)
-end
-
-function CooldownHighlights:SetCustomAspectRatio(trackerKey, slotIndex, state, width, height)
-    local db = GetDB(trackerKey)
-    if db then
-        db[state].customAspectW[slotIndex] = width
-        db[state].customAspectH[slotIndex] = height
-    end
-    SetHighlightAspectRatio(trackerKey, slotIndex, state, "custom")
-end
-
-function CooldownHighlights:GetCustomAspectRatio(trackerKey, slotIndex, state)
-    local db = GetDB(trackerKey)
-    return db and db[state].customAspectW[slotIndex] or 1, db and db[state].customAspectH[slotIndex] or 1
-end
-
-function CooldownHighlights:IsTrackerHidden(trackerKey)
-    return IsTrackerHidden(trackerKey)
-end
-
-function CooldownHighlights:SetTrackerHidden(trackerKey, hidden)
-    SetTrackerHidden(trackerKey, hidden)
-    self:ApplyTrackerVisibility(trackerKey)
-end
-
--- Per-icon hidden API (hides icon completely from tracker)
 function CooldownHighlights:IsIconHidden(trackerKey, slotIndex)
-    return IsIconHidden(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetIconHidden(trackerKey, slotIndex, hidden)
-    SetIconHidden(trackerKey, slotIndex, hidden)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-    -- Refresh the tracker layout to apply alpha=0 on hidden icons
-    if TUICD.Cooldowns and TUICD.Cooldowns.RefreshTrackerLayout then
-        TUICD.Cooldowns.RefreshTrackerLayout(trackerKey)
-    end
-end
-
--- Dock assignment API
-function CooldownHighlights:GetDockAssignment(trackerKey, slotIndex)
-    return GetDockAssignment(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetDockAssignment(trackerKey, slotIndex, dockIndex)
-    SetDockAssignment(trackerKey, slotIndex, dockIndex)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
--- Custom label API
-function CooldownHighlights:SetLabelEnabled(trackerKey, slotIndex, enabled)
-    SetLabelEnabled(trackerKey, slotIndex, enabled)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelEnabled(trackerKey, slotIndex)
-    return GetLabelEnabled(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelText(trackerKey, slotIndex, text)
-    SetLabelText(trackerKey, slotIndex, text)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelText(trackerKey, slotIndex)
-    return GetLabelText(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelFontSize(trackerKey, slotIndex, size)
-    SetLabelFontSize(trackerKey, slotIndex, size)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelFontSize(trackerKey, slotIndex)
-    return GetLabelFontSize(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelColor(trackerKey, slotIndex, color)
-    SetLabelColor(trackerKey, slotIndex, color)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelColor(trackerKey, slotIndex)
-    return GetLabelColor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelOffsetX(trackerKey, slotIndex, offset)
-    SetLabelOffsetX(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelOffsetX(trackerKey, slotIndex)
-    return GetLabelOffsetX(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelOffsetY(trackerKey, slotIndex, offset)
-    SetLabelOffsetY(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelOffsetY(trackerKey, slotIndex)
-    return GetLabelOffsetY(trackerKey, slotIndex)
-end
-
--- Text scale API
-function CooldownHighlights:SetCooldownTextScale(trackerKey, slotIndex, scale)
-    SetCooldownTextScale(trackerKey, slotIndex, scale)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCooldownTextScale(trackerKey, slotIndex)
-    return GetCooldownTextScale(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCountTextScale(trackerKey, slotIndex, scale)
-    SetCountTextScale(trackerKey, slotIndex, scale)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCountTextScale(trackerKey, slotIndex)
-    return GetCountTextScale(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCooldownTextColor(trackerKey, slotIndex, color)
-    SetCooldownTextColor(trackerKey, slotIndex, color)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCooldownTextColor(trackerKey, slotIndex)
-    return GetCooldownTextColor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCountTextColor(trackerKey, slotIndex, color)
-    SetCountTextColor(trackerKey, slotIndex, color)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCountTextColor(trackerKey, slotIndex)
-    return GetCountTextColor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCooldownTextOffsetX(trackerKey, slotIndex, offset)
-    SetCooldownTextOffsetX(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCooldownTextOffsetX(trackerKey, slotIndex)
-    return GetCooldownTextOffsetX(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCooldownTextOffsetY(trackerKey, slotIndex, offset)
-    SetCooldownTextOffsetY(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCooldownTextOffsetY(trackerKey, slotIndex)
-    return GetCooldownTextOffsetY(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCountTextOffsetX(trackerKey, slotIndex, offset)
-    SetCountTextOffsetX(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCountTextOffsetX(trackerKey, slotIndex)
-    return GetCountTextOffsetX(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCountTextOffsetY(trackerKey, slotIndex, offset)
-    SetCountTextOffsetY(trackerKey, slotIndex, offset)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCountTextOffsetY(trackerKey, slotIndex)
-    return GetCountTextOffsetY(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCooldownTextAnchor(trackerKey, slotIndex, anchor)
-    SetCooldownTextAnchor(trackerKey, slotIndex, anchor)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCooldownTextAnchor(trackerKey, slotIndex)
-    return GetCooldownTextAnchor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetCountTextAnchor(trackerKey, slotIndex, anchor)
-    SetCountTextAnchor(trackerKey, slotIndex, anchor)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetCountTextAnchor(trackerKey, slotIndex)
-    return GetCountTextAnchor(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:SetLabelAnchor(trackerKey, slotIndex, anchor)
-    SetLabelAnchor(trackerKey, slotIndex, anchor)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetLabelAnchor(trackerKey, slotIndex)
-    return GetLabelAnchor(trackerKey, slotIndex)
-end
-
--- Per-icon sweep visibility (overrides tracker-level setting when set)
-function CooldownHighlights:SetHideSweep(trackerKey, slotIndex, hide)
-    SetHideSweep(trackerKey, slotIndex, hide)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetHideSweep(trackerKey, slotIndex)
-    return GetHideSweep(trackerKey, slotIndex)
-end
-
--- Per-icon countdown text visibility (overrides tracker-level setting when set)
-function CooldownHighlights:SetShowCountdownText(trackerKey, slotIndex, show)
-    SetShowCountdownText(trackerKey, slotIndex, show)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetShowCountdownText(trackerKey, slotIndex)
-    return GetShowCountdownText(trackerKey, slotIndex)
-end
-
--- Per-icon proc glow visibility (nil = show, default true)
-function CooldownHighlights:SetShowProcGlow(trackerKey, slotIndex, show)
-    SetShowProcGlow(trackerKey, slotIndex, show)
-    UpdateHighlightFrame(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:GetShowProcGlow(trackerKey, slotIndex)
-    return GetShowProcGlow(trackerKey, slotIndex)
-end
-
-function CooldownHighlights:RefreshAllHighlights(trackerKey)
-    -- Refresh all highlight frames for a tracker (used when tracker-level settings change)
-    UpdateAllHighlights(trackerKey)
+    local db = GetDB(trackerKey)
+    return db and db.hidden[slotIndex] == true
 end
 
 -- Helper to check for CDM viewer layout issues (duplicate icons, stale state)
@@ -2603,7 +1940,6 @@ local function HasViewerLayoutIssue(viewer)
                 -- Check for duplicate layoutIndex (Blizzard bug with stale icons between characters)
                 if seenIndices[child.layoutIndex] then
                     hasIssue = true
-                    dprint("Duplicate layoutIndex found:", child.layoutIndex)
                     return  -- Exit early, no need to check more
                 end
                 seenIndices[child.layoutIndex] = true
@@ -2623,7 +1959,7 @@ function CooldownHighlights:ApplyTrackerVisibility(trackerKey)
     local viewer = GetViewer(trackerKey)
     if not viewer then return end
     
-    if IsTrackerHidden(trackerKey) then
+    if CooldownHighlights:GetState(trackerKey, "hideTracker") then
         -- Use alpha + mouse disable instead of Hide() to avoid OnShow issues when unhiding
         viewer:SetAlpha(0)
         viewer:EnableMouse(false)
@@ -2641,7 +1977,6 @@ function CooldownHighlights:ApplyTrackerVisibility(trackerKey)
             if hasLayoutIssue then
                 -- Don't try to Show() - it will trigger RefreshLayout which errors on duplicates
                 -- Alpha is already 1, so the viewer content is visible anyway
-                dprint("Skipping Show() for " .. trackerKey .. " due to duplicate layoutIndex (Blizzard CDM stale icon bug)")
                 return
             end
             
@@ -2676,7 +2011,7 @@ function CooldownHighlights:GetFrame(trackerKey, slotIndex)
 end
 
 function CooldownHighlights:IsEnabled(trackerKey, slotIndex)
-    return IsHighlightEnabled(trackerKey, slotIndex)
+    return CooldownHighlights:GetState(trackerKey, "enabled." .. slotIndex)
 end
 
 function CooldownHighlights:GetTrackerTypes()
@@ -2975,8 +2310,7 @@ function CooldownHighlights:Initialize(trackerKey)
     
     if isInitialized[trackerKey] then return end
     isInitialized[trackerKey] = true
-    
-    dprint("Initializing CooldownHighlights:", trackerKey)
+
     
     -- Create frames for any enabled highlights (only outside combat)
     local db = GetDB(trackerKey)
@@ -3000,7 +2334,6 @@ function CooldownHighlights:Initialize(trackerKey)
         
         for slotIndex, dockIndex in pairs(db.dockAssignment) do
             if dockIndex and highlightFrames[trackerKey] and highlightFrames[trackerKey][slotIndex] then
-                dprint("Restoring dock assignment for", trackerKey, slotIndex, "-> dock", dockIndex)
                 TUICD.Docks:AssignIcon(dockIndex, trackerKey, slotIndex)
             end
         end
@@ -3010,16 +2343,6 @@ function CooldownHighlights:Initialize(trackerKey)
     C_Timer.After(1, RestoreDockAssignments)
     C_Timer.After(3, RestoreDockAssignments)
     
-    -- Start update ticker if we have any enabled
-    local hasEnabled = false
-    for _, enabled in pairs(db.enabled) do
-        if enabled then hasEnabled = true break end
-    end
-    
-    if hasEnabled then
-        StartUpdateTicker(trackerKey)
-    end
-    
     -- Apply tracker visibility
     self:ApplyTrackerVisibility(trackerKey)
     
@@ -3028,11 +2351,11 @@ function CooldownHighlights:Initialize(trackerKey)
     if Layout then
         Layout:RegisterCallback("OnLayoutModeEnter", function()
             RegisterAllWithLayout(trackerKey)
-            UpdateAllHighlights(trackerKey)
+            CooldownHighlights:UpdateAllHighlights(trackerKey)
         end)
         
         Layout:RegisterCallback("OnLayoutModeExit", function()
-            UpdateAllHighlights(trackerKey)
+            CooldownHighlights:UpdateAllHighlights(trackerKey)
         end)
     end
 end
@@ -3050,7 +2373,14 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+
 eventFrame:RegisterEvent("SPELL_DATA_LOAD_RESULT")
+eventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+eventFrame:RegisterEvent("SPELL_UPDATE_CHARGES")
+eventFrame:RegisterEvent("ACTIONBAR_UPDATE_COOLDOWN")
+eventFrame:RegisterEvent("UNIT_AURA")  -- For buff tracker
+
+
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_REGEN_ENABLED" then
@@ -3077,6 +2407,23 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
                     RefreshAllSpellIDCaches()
                 end
             end)
+        end
+    elseif event == "SPELL_UPDATE_COOLDOWN" 
+        or event == "SPELL_UPDATE_CHARGES"
+        or event == "ACTIONBAR_UPDATE_COOLDOWN"
+        or event == "UNIT_AURA" then
+        -- UpdateHighlightFrame()
+        
+        if event == "UNIT_AURA" then
+            local target = ...
+            if target and string.lower(target) == "player" then
+                --DevTool:AddData({ event = event, target = target }, "UNIT_AURA (player)")
+                CooldownHighlights:UpdateAllHighlightsThrottled("buffs")
+            end
+        else
+            for _, key in ipairs({"essential", "utility", "custom"}) do
+                CooldownHighlights:UpdateAllHighlightsThrottled(key)
+            end
         end
     end
 end)

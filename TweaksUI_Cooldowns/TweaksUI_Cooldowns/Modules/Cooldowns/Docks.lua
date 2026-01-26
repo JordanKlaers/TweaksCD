@@ -841,7 +841,6 @@ function Docks:AssignIcon(dockIndex, trackerType, slotIndex)
     
     local frame = GetHighlightFrame(trackerType, slotIndex)
     if not frame then
-        dprint("AssignIcon: No frame found for", trackerType, slotIndex)
         return
     end
     
@@ -880,6 +879,14 @@ function Docks:AssignIcon(dockIndex, trackerType, slotIndex)
     
     -- Reparent to dock
     frame:SetParent(dock)
+    
+    -- CRITICAL: Immediately anchor the frame after reparenting
+    -- Without this, the frame becomes unanchored and invisible until LayoutDock runs
+    frame:ClearAllPoints()
+    frame:SetPoint("CENTER", dock, "CENTER", 0, 0)
+    
+    -- Ensure the dock is shown (icons can't be seen if parent is hidden)
+    dock:Show()
     
     -- Add to arrival order
     local arrivalOrder = iconArrivalOrder[dockIndex]
