@@ -433,7 +433,6 @@ function Cooldowns:GetSettings()
         
         -- Merge any saved settings from database (deep copy nested tables)
         local dbSettings = TUICD.Database:GetModuleSettings(TUICD.MODULE_IDS.COOLDOWNS)
-        DevTool:AddData(dbSettings, "dbSettings")
         if dbSettings then
             for key, trackerSettings in pairs(dbSettings) do
                 if settings[key] and type(trackerSettings) == "table" then
@@ -457,12 +456,6 @@ function Cooldowns:GetSettings()
             end
         end
     end
-    
-    -- NOTE: Removed automatic write-back to database here.
-    -- Writing should only happen explicitly when settings are changed,
-    -- not every time they're read. This was causing profile loads to be
-    -- overwritten by stale cached settings.
-    DevTool:AddData(settings, "Already had settings")
     return settings
 end
 
@@ -7069,7 +7062,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             local viewer = _G["BuffIconCooldownViewer"]
             if viewer then
                 local icons = GetOrderedIcons(viewer, "buffs")
-                DevTool:AddData(icons, 'get ordered icons called here 1')
                 local icon = icons[slotIndex]
                 if icon then
                     local textureObj = icon.Icon or icon.icon
@@ -7437,7 +7429,6 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
             
             -- Use same order as layout (GetOrderedIcons)
             local icons = GetOrderedIcons(viewer, "buffs")
-            DevTool:AddData(icons, 'get ordered icons called here 2')
             if #icons == 0 then
                 local noBuffs = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                 noBuffs:SetPoint("CENTER")
@@ -7617,7 +7608,6 @@ end
 
 
 function Cooldowns:BuildPerIconTab(parent, trackerType)
-    DevTool:AddData("created with " .. trackerType)
     local y = -10
     local CooldownHighlights = TUICD.CooldownHighlights
     local customTrackerKey = trackerType
@@ -9179,7 +9169,6 @@ function Cooldowns:BuildPerIconTab(parent, trackerType)
         else
             -- Regular trackers: use TRACKERS lookup and GetOrderedIcons
             local trackerInfo = GetTrackerInfo(customTrackerKey)
-            DevTool:AddData(icons, 'get ordered icons called here 3')
             if trackerInfo then
                 viewer = _G[trackerInfo.name]
                 if viewer then
@@ -9187,7 +9176,6 @@ function Cooldowns:BuildPerIconTab(parent, trackerType)
                 end
             end
         end
-        DevTool:AddData(icons, "icons")
         -- Handle missing viewer/icons
         if not viewer or not icons then
             local noItems = scrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

@@ -596,6 +596,7 @@ local function CreateHighlightFrame(trackerKey, slotIndex)
     frame.cooldown._TUI_trackerKey = trackerKey
     frame.cooldown._TUI_slotIndex = slotIndex
     frame.cooldown:SetScript("OnCooldownDone", function(self)
+        frame.isOnCooldown = false
         CooldownHighlights:UpdateHighlightFrame(self._TUI_trackerKey, self._TUI_slotIndex)
     end)
     
@@ -963,20 +964,67 @@ function CooldownHighlights:UpdateHighlightFrame(trackerKey, slotIndex)
     local isOnCooldown = CalculateFrameCooldown(trackerKey, slotIndex)
     
     -- Initialize state tracking on first run
-    if not frame._TUI_lastCooldownState then
-        frame._TUI_lastCooldownState = nil  -- nil means unknown/first run
+    if not frame._TUI_currentCooldownState then
+        frame._TUI_currentCooldownState = nil  -- nil means unknown/first run
     end
     
     -- Check if state changed (transition detected)
-    local stateChanged = (frame._TUI_lastCooldownState ~= isOnCooldown)
+    local stateChanged = (frame._TUI_currentCooldownState ~= isOnCooldown)
     
     -- Early return if no state change (performance optimization)
-    if not stateChanged and frame._TUI_lastCooldownState ~= nil then
+    if not stateChanged and frame._TUI_currentCooldownState ~= nil then
         return  -- No transition, skip update
     end
     
     -- State changed or first run - update frame
-    frame._TUI_lastCooldownState = isOnCooldown
+    frame._TUI_currentCooldownState = isOnCooldown
+    frame.isOnCooldown = isOnCooldown  -- Track for RadialSwipe exit condition
+    
+    -- Check if we're transitioning TO cooldown state (start radial swipe animation)
+    if stateChanged and isOnCooldown then
+        -- Reset cooldown complete flag and start recursive animation
+        frame.cooldown._TUI_cooldownComplete = false
+        RadialSwipe:OnUpdate(frame)  -- Starts self-recursive animation loop
+        
+        -- Apply cooldown text settings if they've changed since last cooldown
+        if frame._TUI_cooldownSettingsDirty and frame._TUI_cooldownTextSettings then
+            pcall(function()
+                local settings = frame._TUI_cooldownTextSettings
+                -- Try to find the countdown text in the cooldown frame
+                local cdText = frame.cooldown.Text or frame.cooldown.text
+                if not cdText then
+                    -- Search regions for FontString
+                    for i = 1, frame.cooldown:GetNumRegions() do
+                        local region = select(i, frame.cooldown:GetRegions())
+                        if region and region:GetObjectType() == "FontString" then
+                            cdText = region
+                            break
+                        end
+                    end
+                end
+                
+                if cdText then
+                    if cdText.GetFont then
+                        local fontPath, _, fontFlags = cdText:GetFont()
+                        if fontPath then
+                            local baseSize = 14  -- Base font size for cooldown text
+                            cdText:SetFont(fontPath, baseSize * settings.scale, fontFlags or "OUTLINE")
+                        end
+                    end
+                    if cdText.SetTextColor then
+                        cdText:SetTextColor(settings.color[1] or 1, settings.color[2] or 1, settings.color[3] or 1, settings.color[4] or 1)
+                    end
+                    -- Apply anchor and offset
+                    if cdText.ClearAllPoints then
+                        cdText:ClearAllPoints()
+                        cdText:SetPoint(settings.anchor, frame.cooldown, settings.anchor, settings.offsetX, settings.offsetY)
+                    end
+                end
+            end)
+            -- Clear dirty flag after applying
+            frame._TUI_cooldownSettingsDirty = false
+        end
+    end
     
     -- Always update visibility conditions on state change
     ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
@@ -1543,11 +1591,6 @@ function CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, is
 end
 
 function CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotIndex, db)
-    DevTool:AddData({
-        trackerKey = trackerKey,
-        slotIndex = slotIndex,
-        db = db
-    }, "configuration update: " .. trackerKey)
     local isOnCooldown = CalculateFrameCooldown(trackerKey, slotIndex)
     local enabled = CooldownHighlights:GetState(trackerKey, "enabled." .. slotIndex)
     CooldownHighlights:EnableHighlight(trackerKey, slotIndex, enabled)
@@ -1655,97 +1698,98 @@ function CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotInde
     end
 
 
-
-
-
-
-
-
-    --TODO: Implement the settings that only display when a spell is on cooldown (cooldown size ect.)
+    -- Cache cooldown text settings on frame for application during cooldown transition
+    -- This is more efficient than reading state every update - we only apply when transitioning to cooldown
+    frame._TUI_cooldownTextSettings = {
+        scale = CooldownHighlights:GetState(trackerKey, "cooldownTextScale." .. slotIndex) or 1.0,
+        color = CooldownHighlights:GetState(trackerKey, "cooldownTextColor." .. slotIndex) or {1, 1, 1, 1},
+        offsetX = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetX." .. slotIndex) or 0,
+        offsetY = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetY." .. slotIndex) or 0,
+        anchor = CooldownHighlights:GetState(trackerKey, "cooldownTextAnchor." .. slotIndex) or "CENTER",
+    }
     
-    -- Apply text scale, color, and offset settings
-    -- local cooldownTextScale = CooldownHighlights:GetState(trackerKey, "cooldownTextScale." .. slotIndex) or 1.0
-    -- local cooldownTextColor = CooldownHighlights:GetState(trackerKey, "cooldownTextColor." .. slotIndex) or {1, 1, 1, 1}
-    -- local cooldownTextOffsetX = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetX." .. slotIndex) or 0
-    -- local cooldownTextOffsetY = CooldownHighlights:GetState(trackerKey, "cooldownTextOffsetY." .. slotIndex) or 0
-    -- local cooldownTextAnchor = CooldownHighlights:GetState(trackerKey, "cooldownTextAnchor." .. slotIndex) or "CENTER"
-    -- local countTextScale = CooldownHighlights:GetState(trackerKey, "countTextScale." .. slotIndex) or 1.0
-    -- local countTextColor = CooldownHighlights:GetState(trackerKey, "countTextColor." .. slotIndex) or {1, 1, 1, 1}
-    -- local countTextOffsetX = CooldownHighlights:GetState(trackerKey, "countTextOffsetX." .. slotIndex) or 0
-    -- local countTextOffsetY = CooldownHighlights:GetState(trackerKey, "countTextOffsetY." .. slotIndex) or 0
-    -- local countTextAnchor = CooldownHighlights:GetState(trackerKey, "countTextAnchor." .. slotIndex) or "BOTTOMRIGHT"
+    -- Set dirty flag to signal settings need to be applied on next cooldown transition
+    frame._TUI_cooldownSettingsDirty = true
     
-    -- -- Scale, color, and offset cooldown text (countdown numbers on the cooldown spiral)
-    -- if frame.cooldown then
-    --     pcall(function()
-    --         -- Try to find the countdown text in the cooldown frame
-    --         local cdText = frame.cooldown.Text or frame.cooldown.text
-    --         if not cdText then
-    --             -- Search regions for FontString
-    --             for i = 1, frame.cooldown:GetNumRegions() do
-    --                 local region = select(i, frame.cooldown:GetRegions())
-    --                 if region and region:GetObjectType() == "FontString" then
-    --                     cdText = region
-    --                     break
-    --                 end
-    --             end
-    --         end
+    -- If frame is currently on cooldown, apply settings immediately (user changed settings during cooldown)
+    if isOnCooldown and frame.cooldown then
+        pcall(function()
+            local settings = frame._TUI_cooldownTextSettings
+            -- Try to find the countdown text in the cooldown frame
+            local cdText = frame.cooldown.Text or frame.cooldown.text
+            if not cdText then
+                -- Search regions for FontString
+                for i = 1, frame.cooldown:GetNumRegions() do
+                    local region = select(i, frame.cooldown:GetRegions())
+                    if region and region:GetObjectType() == "FontString" then
+                        cdText = region
+                        break
+                    end
+                end
+            end
             
-    --         if cdText then
-    --             if cdText.GetFont then
-    --                 local fontPath, _, fontFlags = cdText:GetFont()
-    --                 if fontPath then
-    --                     local baseSize = 14  -- Base font size for cooldown text
-    --                     cdText:SetFont(fontPath, baseSize * cooldownTextScale, fontFlags or "OUTLINE")
-    --                 end
-    --             end
-    --             if cdText.SetTextColor then
-    --                 cdText:SetTextColor(cooldownTextColor[1] or 1, cooldownTextColor[2] or 1, cooldownTextColor[3] or 1, cooldownTextColor[4] or 1)
-    --             end
-    --             -- Apply anchor and offset
-    --             if cdText.ClearAllPoints then
-    --                 cdText:ClearAllPoints()
-    --                 cdText:SetPoint(cooldownTextAnchor, frame.cooldown, cooldownTextAnchor, cooldownTextOffsetX, cooldownTextOffsetY)
-    --             end
-    --         end
-    --     end)
-    -- end
+            if cdText then
+                if cdText.GetFont then
+                    local fontPath, _, fontFlags = cdText:GetFont()
+                    if fontPath then
+                        local baseSize = 14  -- Base font size for cooldown text
+                        cdText:SetFont(fontPath, baseSize * settings.scale, fontFlags or "OUTLINE")
+                    end
+                end
+                if cdText.SetTextColor then
+                    cdText:SetTextColor(settings.color[1] or 1, settings.color[2] or 1, settings.color[3] or 1, settings.color[4] or 1)
+                end
+                -- Apply anchor and offset
+                if cdText.ClearAllPoints then
+                    cdText:ClearAllPoints()
+                    cdText:SetPoint(settings.anchor, frame.cooldown, settings.anchor, settings.offsetX, settings.offsetY)
+                end
+            end
+        end)
+    end
     
-    -- -- Scale, color, and offset count text (stack/charge numbers)
-    -- if frame.count then
-    --     pcall(function()
-    --         local fontPath, _, fontFlags = frame.count:GetFont()
-    --         if fontPath then
-    --             local baseSize = 12  -- Base font size for count text
-    --             frame.count:SetFont(fontPath, baseSize * countTextScale, fontFlags or "OUTLINE")
-    --         end
-    --         frame.count:SetTextColor(countTextColor[1] or 1, countTextColor[2] or 1, countTextColor[3] or 1, countTextColor[4] or 1)
-    --         -- Apply anchor and offset
-    --         frame.count:ClearAllPoints()
-    --         frame.count:SetPoint(countTextAnchor, frame, countTextAnchor, countTextOffsetX, countTextOffsetY)
-    --     end)
-    -- end
+    -- Count text settings (always applied, not cooldown-dependent)
+    local countTextScale = CooldownHighlights:GetState(trackerKey, "countTextScale." .. slotIndex) or 1.0
+    local countTextColor = CooldownHighlights:GetState(trackerKey, "countTextColor." .. slotIndex) or {1, 1, 1, 1}
+    local countTextOffsetX = CooldownHighlights:GetState(trackerKey, "countTextOffsetX." .. slotIndex) or 0
+    local countTextOffsetY = CooldownHighlights:GetState(trackerKey, "countTextOffsetY." .. slotIndex) or 0
+    local countTextAnchor = CooldownHighlights:GetState(trackerKey, "countTextAnchor." .. slotIndex) or "BOTTOMRIGHT"
     
-    -- -- Custom accessibility label
-    -- if frame.customLabel then
-    --     if CooldownHighlights:GetState(trackerKey, "labelEnabled." .. slotIndex) then
-    --         local labelText = CooldownHighlights:GetState(trackerKey, "labelText." .. slotIndex) or ""
-    --         local fontSize = CooldownHighlights:GetState(trackerKey, "labelFontSize." .. slotIndex) or 14
-    --         local labelColor = CooldownHighlights:GetState(trackerKey, "labelColor." .. slotIndex) or {1, 1, 1, 1}
-    --         local offsetX = CooldownHighlights:GetState(trackerKey, "labelOffsetX." .. slotIndex) or 0
-    --         local offsetY = CooldownHighlights:GetState(trackerKey, "labelOffsetY." .. slotIndex) or 0
-    --         local labelAnchor = CooldownHighlights:GetState(trackerKey, "labelAnchor." .. slotIndex) or "CENTER"
+    -- Scale, color, and offset count text (stack/charge numbers)
+    if frame.count then
+        pcall(function()
+            local fontPath, _, fontFlags = frame.count:GetFont()
+            if fontPath then
+                local baseSize = 12  -- Base font size for count text
+                frame.count:SetFont(fontPath, baseSize * countTextScale, fontFlags or "OUTLINE")
+            end
+            frame.count:SetTextColor(countTextColor[1] or 1, countTextColor[2] or 1, countTextColor[3] or 1, countTextColor[4] or 1)
+            -- Apply anchor and offset
+            frame.count:ClearAllPoints()
+            frame.count:SetPoint(countTextAnchor, frame, countTextAnchor, countTextOffsetX, countTextOffsetY)
+        end)
+    end
+    
+    -- Custom accessibility label (always shown if enabled, regardless of cooldown state)
+    if frame.customLabel then
+        if CooldownHighlights:GetState(trackerKey, "labelEnabled." .. slotIndex) then
+            local labelText = CooldownHighlights:GetState(trackerKey, "labelText." .. slotIndex) or ""
+            local fontSize = CooldownHighlights:GetState(trackerKey, "labelFontSize." .. slotIndex) or 14
+            local labelColor = CooldownHighlights:GetState(trackerKey, "labelColor." .. slotIndex) or {1, 1, 1, 1}
+            local offsetX = CooldownHighlights:GetState(trackerKey, "labelOffsetX." .. slotIndex) or 0
+            local offsetY = CooldownHighlights:GetState(trackerKey, "labelOffsetY." .. slotIndex) or 0
+            local labelAnchor = CooldownHighlights:GetState(trackerKey, "labelAnchor." .. slotIndex) or "CENTER"
             
-    --         frame.customLabel:SetFont("Fonts\\FRIZQT__.TTF", fontSize, "OUTLINE")
-    --         frame.customLabel:SetText(labelText)
-    --         frame.customLabel:SetTextColor(labelColor[1] or 1, labelColor[2] or 1, labelColor[3] or 1, labelColor[4] or 1)
-    --         frame.customLabel:ClearAllPoints()
-    --         frame.customLabel:SetPoint(labelAnchor, frame, labelAnchor, offsetX, offsetY)
-    --         frame.customLabel:Show()
-    --     else
-    --         frame.customLabel:Hide()
-    --     end
-    -- end
+            frame.customLabel:SetFont("Fonts\\FRIZQT__.TTF", fontSize, "OUTLINE")
+            frame.customLabel:SetText(labelText)
+            frame.customLabel:SetTextColor(labelColor[1] or 1, labelColor[2] or 1, labelColor[3] or 1, labelColor[4] or 1)
+            frame.customLabel:ClearAllPoints()
+            frame.customLabel:SetPoint(labelAnchor, frame, labelAnchor, offsetX, offsetY)
+            frame.customLabel:Show()
+        else
+            frame.customLabel:Hide()
+        end
+    end
 
 end
 
@@ -1833,6 +1877,9 @@ function CooldownHighlights:GetSlotIndexFromSpellID(trackerKey, spellID)
 end
 
 function CooldownHighlights:UpdateState(trackerKey, identifier, payload)
+    if string.find(trackerKey, "custom") then
+        trackerKey = "custom"
+    end
     local db = GetDB(trackerKey)
     if not db then return end
     
@@ -1888,6 +1935,9 @@ end
 
 
 function CooldownHighlights:GetState(trackerKey, path, log)
+    if string.find(trackerKey, "custom") then
+        trackerKey = "custom"
+    end
     local db = GetDB(trackerKey)
     if not db then return end
     local value = accessNestedValue(db, path, nil, "get")
@@ -2422,7 +2472,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
         if event == "UNIT_AURA" then
             local target = ...
             if target and string.lower(target) == "player" then
-                --DevTool:AddData({ event = event, target = target }, "UNIT_AURA (player)")
                 CooldownHighlights:UpdateAllHighlightsThrottled("buffs")
             end
         else

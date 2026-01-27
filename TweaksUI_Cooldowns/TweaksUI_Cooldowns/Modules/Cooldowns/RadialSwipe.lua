@@ -431,60 +431,47 @@ function RadialSwipe:OnUpdate(parentFrame)
 	if not parentFrame.cooldown or not parentFrame.cooldown.GetCooldownTimes then
 		return
 	end
-
-	-- If a real cooldown is active, continue animating it regardless of new cooldown data
-	if parentFrame.radialSwipe.realCooldownActive then
-		local startSec = parentFrame.radialSwipe.realCooldownStart
-		local durationSec = parentFrame.radialSwipe.realCooldownDuration
-		local currentTime = GetTime()
-		local elapsed = currentTime - startSec
-		local progress = elapsed / durationSec
-
-		if progress >= 1 then
-			-- Real cooldown finished
-			parentFrame.radialSwipe:Hide()
-			parentFrame.radialSwipe.realCooldownActive = false
-			parentFrame.radialSwipe.realCooldownStart = nil
-			parentFrame.radialSwipe.realCooldownDuration = nil
-		else
-			-- Continue animating the real cooldown
-			parentFrame.radialSwipe:SetProgressValue(progress, 0, 360)
-			parentFrame.radialSwipe:Show()
-		end
-		return
-	end
-
+	
 	local start, duration = parentFrame.cooldown:GetCooldownTimes()
 	
-	-- Check if there's an active cooldown (duration in milliseconds)
-	-- Filter out GCD (< 2000ms) to only show swipe for real cooldowns
-	if not start or not duration or duration == 0 or duration < GCD_THRESHOLD then
-		parentFrame.radialSwipe:Hide()
-		return
+	-- Initialize cooldown tracking on first call (requires valid cooldown data)
+	if not parentFrame.radialSwipe.realCooldownStart or not parentFrame.radialSwipe.realCooldownDuration then 
+		local startSec = start / 1000
+		local durationSec = duration / 1000
+		parentFrame.radialSwipe.realCooldownStart = startSec
+		parentFrame.radialSwipe.realCooldownDuration = durationSec
 	end
 
-	-- Convert milliseconds to seconds
-	local startSec = start / 1000
-	local durationSec = duration / 1000
 	local currentTime = GetTime()
-	local elapsed = currentTime - startSec
-	local progress = elapsed / durationSec  -- 0 to 1 (empty to full - FILLS UP during cooldown)
+	local elapsed = currentTime - parentFrame.radialSwipe.realCooldownStart
+	local progress = elapsed / parentFrame.radialSwipe.realCooldownDuration
 
-	-- Store real cooldown info and set flag
-	parentFrame.radialSwipe.realCooldownActive = true
-	parentFrame.radialSwipe.realCooldownStart = startSec
-	parentFrame.radialSwipe.realCooldownDuration = durationSec
-
-	if progress >= 1 then
-		-- Cooldown finished (fully filled)
-		parentFrame.radialSwipe:Hide()
+	-- Exit conditions: cooldown cancelled, completed, or it's actually a GCD
+	if 
+    parentFrame.isOnCooldown == false
+    or progress >= 1
+    or (not start or not duration or duration == 0 or duration < GCD_THRESHOLD) then
+		-- Cooldown finished/cancelled/GCD - stop recursion and apply final visibility
+		local radialDisplayState = TUICD.CooldownHighlights:GetState(parentFrame.trackerKey, "radialSwipe.displayState." .. parentFrame.slotIndex) or "always"
+		if radialDisplayState == "always" or radialDisplayState == "available" then
+			parentFrame.radialSwipe:SetProgressValue(1, 0, 360)
+			parentFrame.radialSwipe:Show()
+		else
+			parentFrame.radialSwipe:Hide()
+		end
+		
+		-- Clear tracking
 		parentFrame.radialSwipe.realCooldownActive = false
 		parentFrame.radialSwipe.realCooldownStart = nil
 		parentFrame.radialSwipe.realCooldownDuration = nil
 	else
-		-- Update swipe progress - fills clockwise from top as cooldown progresses
+		-- Continue animating - update display and recurse with throttling
 		parentFrame.radialSwipe:SetProgressValue(progress, 0, 360)
 		parentFrame.radialSwipe:Show()
+		-- Recursive call with 50ms throttle (20 Hz update rate)
+		C_Timer.After(0.05, function()
+			RadialSwipe:OnUpdate(parentFrame)
+		end)
 	end
 end
 
