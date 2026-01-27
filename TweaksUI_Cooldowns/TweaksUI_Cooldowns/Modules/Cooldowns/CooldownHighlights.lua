@@ -1543,6 +1543,11 @@ function CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, is
 end
 
 function CooldownHighlights:UpdateFrameConfigurationChanges(trackerKey, slotIndex, db)
+    DevTool:AddData({
+        trackerKey = trackerKey,
+        slotIndex = slotIndex,
+        db = db
+    }, "configuration update: " .. trackerKey)
     local isOnCooldown = CalculateFrameCooldown(trackerKey, slotIndex)
     local enabled = CooldownHighlights:GetState(trackerKey, "enabled." .. slotIndex)
     CooldownHighlights:EnableHighlight(trackerKey, slotIndex, enabled)
