@@ -426,12 +426,12 @@ function CooldownHighlights:SetContainerVisibility(trackerKey)
         CooldownHighlights:invokeProtectedContainerShow(viewer)
         viewer:SetAlpha(1)
         viewer:EnableMouse(true)
-        CooldownHighlights:StartHideEnforcement(trackerKey)
+        CooldownHighlights:StopHideEnforcement(trackerKey)
     elseif viewer and (shouldHideEverything or shouldHideOnlyContainer) then 
         viewer:Hide()
         viewer:SetAlpha(0)
         viewer:EnableMouse(false)
-        CooldownHighlights:StopHideEnforcement(trackerKey)
+        CooldownHighlights:StartHideEnforcement(trackerKey)
     end
     return shouldHideEverything, shouldHideOnlyContainer
 end
