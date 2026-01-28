@@ -173,7 +173,7 @@ local TRACKER_DEFAULTS = {
     countTextColorB = 1.0,      -- Blue component
     countTextFont = "Default",  -- Font name from LibSharedMedia
     -- Cooldown sweep visibility
-    showSweep = true,           -- Show cooldown sweep/spiral animation
+    hideSweep = false,           -- Show cooldown sweep/spiral animation
     
     showCountdownText = true,   -- Show/hide countdown numbers
     -- Visibility
@@ -250,35 +250,6 @@ local DOCK_DEFAULTS = {
     point = "CENTER",
     x = 0,
     y = -100,
-    -- Visual Override Settings (applies to all icons in dock)
-    visualOverrideEnabled = false,
-    vo_iconSize = 36,
-    vo_opacity = 1.0,
-    vo_aspectRatio = "1:1",
-    vo_customAspectW = 1,
-    vo_customAspectH = 1,
-    vo_showSweep = true,
-    vo_showCountdownText = true,
-    vo_showProcGlow = true,
-    -- Cooldown text settings
-    vo_cooldownTextScale = 1.0,
-    vo_cooldownTextColor = { 1, 1, 1, 1 },
-    vo_cooldownTextOffsetX = 0,
-    vo_cooldownTextOffsetY = 0,
-    vo_cooldownTextAnchor = "CENTER",
-    -- Count text settings
-    vo_countTextScale = 1.0,
-    vo_countTextColor = { 1, 1, 1, 1 },
-    vo_countTextOffsetX = 0,
-    vo_countTextOffsetY = -2,
-    vo_countTextAnchor = "BOTTOMRIGHT",
-    -- Custom label settings
-    vo_labelEnabled = false,
-    vo_labelFontSize = 14,
-    vo_labelColor = { 1, 1, 1, 1 },
-    vo_labelOffsetX = 0,
-    vo_labelOffsetY = 0,
-    vo_labelAnchor = "CENTER",
 }
 
 -- Initialize dock defaults (4 docks)
@@ -401,6 +372,7 @@ local function dprint(...)
 end
 
 local function GetSetting(trackerKey, settingName)
+    if settingName == "hideSweep" then return false end
     -- Auto-initialize settings if needed (like TUI:CD does with Database)
     if not settings then
         Cooldowns:GetSettings()  -- This initializes settings from database
@@ -1643,10 +1615,10 @@ local function ApplyGridLayout(viewer, trackerKey)
     -- Cooldown visibility settings (unified sweep)
     
     
-    local showSweep = GetSetting(trackerKey, "showSweep")
+    local hideSweep = GetSetting(trackerKey, "hideSweep")
     
     
-    if showSweep == nil then showSweep = true end
+    if hideSweep == nil then hideSweep = false end
     local showCountdownText = GetSetting(trackerKey, "showCountdownText")
     if showCountdownText == nil then showCountdownText = true end
     
@@ -1806,17 +1778,19 @@ local function ApplyGridLayout(viewer, trackerKey)
             if cd then
                 -- Apply current settings
                 pcall(function()
-                    cd:SetDrawSwipe(showSweep)
+                    cd:SetDrawSwipe(not hideSweep)
+                    cd:SetDrawEdge(not hideSweep)
                     cd:SetHideCountdownNumbers(not showCountdownText)
                 end)
                 
                 -- Hook SetCooldown to reapply settings after each Blizzard update
                 if not cd._TUI_CooldownHooked then
-                    cd._TUI_showSweep = showSweep
+                    cd._TUI_hideSweep = hideSweep
                     cd._TUI_showCountdownText = showCountdownText
                     hooksecurefunc(cd, "SetCooldown", function(self)
                         pcall(function()
-                            self:SetDrawSwipe(self._TUI_showSweep)
+                            self:SetDrawSwipe(not self._TUI_hideSweep)
+                            self:SetDrawEdge(not self._TUI_hideSweep)
                             self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                         end)
                     end)
@@ -1824,7 +1798,8 @@ local function ApplyGridLayout(viewer, trackerKey)
                     if cd.SetCooldownFromDurationObject then
                         hooksecurefunc(cd, "SetCooldownFromDurationObject", function(self)
                             pcall(function()
-                                self:SetDrawSwipe(self._TUI_showSweep)
+                                self:SetDrawSwipe(not self._TUI_hideSweep)
+                                self:SetDrawEdge(not self._TUI_hideSweep)
                                 self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                             end)
                         end)
@@ -1832,7 +1807,7 @@ local function ApplyGridLayout(viewer, trackerKey)
                     cd._TUI_CooldownHooked = true
                 else
                     -- Update stored settings for existing hook
-                    cd._TUI_showSweep = showSweep
+                    cd._TUI_hideSweep = hideSweep
                     cd._TUI_showCountdownText = showCountdownText
                 end
             end
@@ -2064,7 +2039,7 @@ local function ApplyGridLayout(viewer, trackerKey)
     -- STANDARD GRID LAYOUT (respects direction, alignment, secondary direction)
     dprint(string.format("ApplyGridLayout [%s]: Using STANDARD grid layout, primaryIsHorizontal=%s, numRows=%d", 
         trackerKey, tostring(primaryIsHorizontal), numRows))
-    
+
     for i, icon in ipairs(icons) do
         local col, row
         local idx = i - 1
@@ -2215,17 +2190,19 @@ local function ApplyGridLayout(viewer, trackerKey)
             if cd then
                 -- Apply current settings
                 pcall(function()
-                    cd:SetDrawSwipe(showSweep)
+                    cd:SetDrawSwipe(not hideSweep)
+                    cd:SetDrawEdge(not hideSweep)
                     cd:SetHideCountdownNumbers(not showCountdownText)
                 end)
                 
                 -- Hook SetCooldown to reapply settings after each Blizzard update
                 if not cd._TUI_CooldownHooked then
-                    cd._TUI_showSweep = showSweep
+                    cd._TUI_hideSweep = hideSweep
                     cd._TUI_showCountdownText = showCountdownText
                     hooksecurefunc(cd, "SetCooldown", function(self)
                         pcall(function()
-                            self:SetDrawSwipe(self._TUI_showSweep)
+                            self:SetDrawSwipe(not self._TUI_hideSweep)
+                            self:SetDrawEdge(not self._TUI_hideSweep)
                             self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                         end)
                     end)
@@ -2233,7 +2210,8 @@ local function ApplyGridLayout(viewer, trackerKey)
                     if cd.SetCooldownFromDurationObject then
                         hooksecurefunc(cd, "SetCooldownFromDurationObject", function(self)
                             pcall(function()
-                                self:SetDrawSwipe(self._TUI_showSweep)
+                                self:SetDrawSwipe(not self._TUI_hideSweep)
+                                self:SetDrawEdge(not self._TUI_hideSweep)
                                 self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                             end)
                         end)
@@ -2241,7 +2219,7 @@ local function ApplyGridLayout(viewer, trackerKey)
                     cd._TUI_CooldownHooked = true
                 else
                     -- Update stored settings for existing hook
-                    cd._TUI_showSweep = showSweep
+                    cd._TUI_hideSweep = hideSweep
                     cd._TUI_showCountdownText = showCountdownText
                 end
             end
@@ -2364,8 +2342,8 @@ local function UpdateCustomTrackerVisibility()
         return
     end
     
-    local shouldShow = ShouldShowCustomTrackers()
     local trackerKey = "customTrackers"
+    local shouldShow = ShouldBeVisible(trackerKey)
     
     if shouldShow then
         customTrackerFrame:Show()
@@ -2935,11 +2913,13 @@ local function CreateCustomTrackerIcon(entry, parent)
         icon:SetTexCoord(zoom, 1 - zoom, zoom, 1 - zoom)
     end
     
+    local hideSweep = GetSetting(trackerKey, "hideSweep")
+    if hideSweep == nil then hideSweep = false end
     -- Create cooldown frame overlay
     local cd = CreateFrame("Cooldown", nil, frame, "CooldownFrameTemplate")
     cd:SetAllPoints(frame)
-    cd:SetDrawEdge(true)
-    cd:SetDrawSwipe(true)
+    cd:SetDrawEdge(not hideSweep)
+    cd:SetDrawSwipe(not hideSweep)
     cd:SetSwipeColor(0, 0, 0, 0.8)
     cd:SetHideCountdownNumbers(false)
     
@@ -3382,10 +3362,10 @@ local function LayoutCustomTrackerIcons()
     -- Cooldown visibility settings (unified sweep)
     
     
-    local showSweep = GetSetting(trackerKey, "showSweep")
+    local hideSweep = GetSetting(trackerKey, "hideSweep")
     
     
-    if showSweep == nil then showSweep = true end
+    if hideSweep == nil then hideSweep = false end
     local showCountdownText = GetSetting(trackerKey, "showCountdownText")
     if showCountdownText == nil then showCountdownText = true end
     
@@ -3515,19 +3495,26 @@ local function LayoutCustomTrackerIcons()
             -- Apply cooldown visibility settings (sweep and countdown text)
             local cdFrame = icon.Cooldown or icon.cooldown
             if cdFrame then
-                -- Apply current settings
+                -- Update stored settings (hook from CreateCustomTrackerIcon will use these)
+                cdFrame._TUI_hideSweep = hideSweep
+                cdFrame._TUI_showCountdownText = showCountdownText
+                
+                -- Apply current settings immediately
                 pcall(function()
-                    cdFrame:SetDrawSwipe(showSweep)
+                    if (currentIconIdx == 2) then DevTool:AddData(self, "SetCooldown: " .. currentIconIdx) end
+                    cdFrame:SetDrawSwipe(not hideSweep)
+                    cdFrame:SetDrawEdge(not hideSweep)
                     cdFrame:SetHideCountdownNumbers(not showCountdownText)
                 end)
                 
                 -- Hook SetCooldown to reapply settings after each Blizzard update
                 if not cdFrame._TUI_CooldownHooked then
-                    cdFrame._TUI_showSweep = showSweep
+                    cdFrame._TUI_hdieSweep = hdieSweep
                     cdFrame._TUI_showCountdownText = showCountdownText
                     hooksecurefunc(cdFrame, "SetCooldown", function(self)
                         pcall(function()
-                            self:SetDrawSwipe(self._TUI_showSweep)
+                            self:SetDrawSwipe(not self._TUI_hdieSweep)
+                            self:SetDrawEdge(not self._TUI_hdieSweep)
                             self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                         end)
                     end)
@@ -3535,7 +3522,8 @@ local function LayoutCustomTrackerIcons()
                     if cdFrame.SetCooldownFromDurationObject then
                         hooksecurefunc(cdFrame, "SetCooldownFromDurationObject", function(self)
                             pcall(function()
-                                self:SetDrawSwipe(self._TUI_showSweep)
+                                self:SetDrawSwipe(not self._TUI_hdieSweep)
+                                self:SetDrawEdge(not self._TUI_hdieSweep)
                                 self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                             end)
                         end)
@@ -3543,7 +3531,7 @@ local function LayoutCustomTrackerIcons()
                     cdFrame._TUI_CooldownHooked = true
                 else
                     -- Update stored settings for existing hook
-                    cdFrame._TUI_showSweep = showSweep
+                    cdFrame._TUI_hdieSweep = hdieSweep
                     cdFrame._TUI_showCountdownText = showCountdownText
                 end
             end
@@ -3830,7 +3818,7 @@ local function LayoutCustomTrackerIcons()
     local shiftX = -boundsMinX
     -- Shift Y so top edge is at 0 (boundsMaxY becomes 0)
     local shiftY = -boundsMaxY
-    
+
     -- Second pass: position icons with normalized coordinates
     for i, icon in ipairs(icons) do
         local pos = iconPositions[i]
@@ -3921,17 +3909,20 @@ local function LayoutCustomTrackerIcons()
             if cdFrame then
                 -- Apply current settings
                 pcall(function()
-                    cdFrame:SetDrawSwipe(showSweep)
+                    cdFrame:SetDrawSwipe(not hideSweep)
+                    cdFrame:SetDrawEdge(not hideSweep)
                     cdFrame:SetHideCountdownNumbers(not showCountdownText)
                 end)
                 
                 -- Hook SetCooldown to reapply settings after each Blizzard update
                 if not cdFrame._TUI_CooldownHooked then
-                    cdFrame._TUI_showSweep = showSweep
+                    cdFrame._TUI_hideSweep = hideSweep
                     cdFrame._TUI_showCountdownText = showCountdownText
                     hooksecurefunc(cdFrame, "SetCooldown", function(self)
                         pcall(function()
-                            self:SetDrawSwipe(self._TUI_showSweep)
+                            if (i == 2) then DevTool:AddData(self, "SetCooldown: " .. i) end
+                            self:SetDrawSwipe(not self._TUI_hideSweep)
+                            self:SetDrawEdge(not self._TUI_hideSweep)
                             self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                         end)
                     end)
@@ -3939,7 +3930,9 @@ local function LayoutCustomTrackerIcons()
                     if cdFrame.SetCooldownFromDurationObject then
                         hooksecurefunc(cdFrame, "SetCooldownFromDurationObject", function(self)
                             pcall(function()
-                                self:SetDrawSwipe(self._TUI_showSweep)
+                                if (i == 2) then DevTool:AddData(self, "SetCooldoSetCooldownFromDurationObjectwn: " .. i) end
+                                self:SetDrawSwipe(not self._TUI_hideSweep)
+                                self:SetDrawEdge(not self._TUI_hideSweep)
                                 self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
                             end)
                         end)
@@ -3947,7 +3940,7 @@ local function LayoutCustomTrackerIcons()
                     cdFrame._TUI_CooldownHooked = true
                 else
                     -- Update stored settings for existing hook
-                    cdFrame._TUI_showSweep = showSweep
+                    cdFrame._TUI_hideSweep = hideSweep
                     cdFrame._TUI_showCountdownText = showCountdownText
                 end
             end
@@ -10267,7 +10260,7 @@ function Cooldowns:CreateCustomTrackersPanel()
         
         -- Local RefreshLayout helper
         local function RefreshLayout()
-            UpdateCustomTrackerLayout()
+            LayoutCustomTrackerIcons()
         end
         
         -- Helper to create a font dropdown
