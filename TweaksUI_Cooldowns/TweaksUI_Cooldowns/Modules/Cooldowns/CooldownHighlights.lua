@@ -371,52 +371,95 @@ end
 
 -- Check if highlight should be visible based on tracker's visibility conditions
 -- trackerKey: "essential", "utility", or "custom"
-local function ShouldHighlightBeVisible(trackerKey)
+local function shouldEverythingBeHidden(trackerKey)
     -- Always show in Layout Mode for positioning
     local layoutContainer = _G["TweaksUI_LayoutContainer"]
     if layoutContainer and layoutContainer:IsShown() then
-        return true
+        return false
     end
     
     -- Always show in Edit Mode
     if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
-        return true
+        return false
     end
     
     -- Get tracker settings via Database
-    if not TUICD.Database then return true end
+    if not TUICD.Database then return false end
     
     -- Map "custom" to "customTrackers" for database access
     local dbTrackerKey = (trackerKey == "custom") and "customTrackers" or trackerKey
     
     local visibilityEnabled = TUICD.Database:GetTrackerSetting(dbTrackerKey, "visibilityEnabled")
     if not visibilityEnabled then
-        return true  -- Visibility system disabled = always show
+        return false  -- Visibility system disabled = everything should hide
     end
     
     local state = GetPlayerState()
     
     -- OR logic: if ANY checked condition is true, show the highlight
-    if state.inCombat and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInCombat") then return true end
-    if not state.inCombat and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showOutOfCombat") then return true end
-    if state.isSolo and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showSolo") then return true end
-    if state.inGroup and not state.inRaid and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInParty") then return true end
-    if state.inRaid and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInRaid") then return true end
-    if state.inInstance and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInInstance") then return true end
-    if state.inArena and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInArena") then return true end
-    if state.inBattleground and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInBattleground") then return true end
-    if state.hasTarget and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showHasTarget") then return true end
-    if not state.hasTarget and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showNoTarget") then return true end
-    if state.isMounted and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showMounted") then return true end
-    if not state.isMounted and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showNotMounted") then return true end
+    if state.inCombat and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInCombat") then return false end
+    if not state.inCombat and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showOutOfCombat") then return false end
+    if state.isSolo and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showSolo") then return false end
+    if state.inGroup and not state.inRaid and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInParty") then return false end
+    if state.inRaid and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInRaid") then return false end
+    if state.inInstance and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInInstance") then return false end
+    if state.inArena and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInArena") then return false end
+    if state.inBattleground and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showInBattleground") then return false end
+    if state.hasTarget and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showHasTarget") then return false end
+    if not state.hasTarget and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showNoTarget") then return false end
+    if state.isMounted and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showMounted") then return false end
+    if not state.isMounted and TUICD.Database:GetTrackerSetting(dbTrackerKey, "showNotMounted") then return false end
     
     -- No conditions matched
-    return false
+    return true
 end
 
 -- ============================================================================
 -- VISUAL STATE DETECTION
 -- ============================================================================
+
+function CooldownHighlights:SetContainerVisibility(trackerKey)
+    local shouldHideEverything = shouldEverythingBeHidden(trackerKey)
+    local shouldHideOnlyContainer = CooldownHighlights:GetState(trackerKey, "hideTracker")
+    local viewer = GetViewer(trackerKey)
+    if viewer and not shouldHideEverything and not shouldHideOnlyContainer then
+        CooldownHighlights:invokeProtectedContainerShow(viewer)
+        viewer:SetAlpha(1)
+        viewer:EnableMouse(true)
+        CooldownHighlights:StartHideEnforcement(trackerKey)
+    elseif viewer and (shouldHideEverything or shouldHideOnlyContainer) then 
+        viewer:Hide()
+        viewer:SetAlpha(0)
+        viewer:EnableMouse(false)
+        CooldownHighlights:StopHideEnforcement(trackerKey)
+    end
+    return shouldHideEverything, shouldHideOnlyContainer
+end
+
+function CooldownHighlights:invokeProtectedContainerShow(viewer)
+    if not viewer:IsShown() then
+        -- Check for layout issues before showing (Blizzard CDM bug with stale icons)
+        local hasLayoutIssue, iconCount = CooldownHighlights:HasViewerLayoutIssue(viewer)
+        
+        if hasLayoutIssue then
+            -- Don't try to Show() - it will trigger RefreshLayout which errors on duplicates
+            -- Alpha is already 1, so the viewer content is visible anyway
+            return
+        end
+        
+        -- Fix Midnight Beta secret value issue before showing
+        pcall(function()
+            for _, child in ipairs({viewer:GetChildren()}) do
+                -- Clear secret values by setting to false using rawset
+                rawset(child, "allowAvailableAlert", false)
+                rawset(child, "allowOnCooldownAlert", false)
+            end
+        end)
+        
+        -- Wrap Show() in pcall - if it fails, the viewer is at least visible via alpha
+        pcall(viewer.Show, viewer)
+    end
+end
 
 -- Cooldowns longer than 3000ms (3 sec) are "real" cooldowns, not GCD (~1500ms)
 local GCD_THRESHOLD = 3000
@@ -870,7 +913,7 @@ local function CalculateFrameCooldown(trackerKey, slotIndex)
     return thisIconOnCooldown
 end
 
-local function ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
+function CooldownHighlights:ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
     local frame = highlightFrames[trackerKey][slotIndex]
     if not frame then return end
     local showInactive = CooldownHighlights:GetState(trackerKey, "inactive.show." .. slotIndex)
@@ -880,24 +923,23 @@ local function ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
     if dockAssignment and TUICD.Docks then
         TUICD.Docks:NotifyIconUpdate(trackerKey, slotIndex)
     end
-    
-    -- Determine visibility based on confirmed cooldown state AND tracker visibility
-    local trackerVisible = ShouldHighlightBeVisible(trackerKey)
-    local shouldShow = trackerVisible
-    if shouldShow then
+    local shouldHideEverything, shouldHideOnlyContainer = CooldownHighlights:SetContainerVisibility(trackerKey)
+    local shouldShowCustomHighlight = not shouldHideEverything -- If we are hiding everything, then we should NOT show the custom highlight
+    if shouldShowCustomHighlight then
         if isOnCooldown then
             -- CONFIRMED on a real cooldown (> GCD) - check if user wants inactive state shown
             if not showInactive then
-                shouldShow = false
+                shouldShowCustomHighlight = false
             end
         else
             -- Either ready OR couldn't confirm cooldown - treat as ready
             -- Check if user wants active state shown
             if not showActive then
-                shouldShow = false
+                shouldShowCustomHighlight = false
             end
         end
     end
+    frame.shouldShowCustomHighlight = shouldShowCustomHighlight
     if isOnCooldown then
         local showCountdownText = GetShouldShowCountdownText(trackerKey, slotIndex)
         
@@ -927,7 +969,7 @@ local function ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
         frame.cooldown:SetHideCountdownNumbers(true)
     end
 
-    if shouldShow then
+    if shouldShowCustomHighlight then
         --Apply correct state's visual settings
         local actualState = isOnCooldown and "inactive" or "active"
         local actualOpacity = CooldownHighlights:GetState(trackerKey, actualState .. ".opacity." .. slotIndex) or 1.0
@@ -940,7 +982,7 @@ local function ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
     else
         local showRadialSwipe = CooldownHighlights:UpdateRadialSwipeVisbility(trackerKey, slotIndex, isOnCooldown, frame)        
         -- The conditions above have already determined if the radial should be visible or not        
-        if showRadialSwipe then
+        if showRadialSwipe and not shouldHideEverything then -- if the main container is hidden, than the radial swipe should also be hidden
             -- Hide icon and backdrop but keep frame visible for radial swipe
             frame.icon:Hide()
             -- Hide backdrop by making it fully transparent
@@ -1027,7 +1069,7 @@ function CooldownHighlights:UpdateHighlightFrame(trackerKey, slotIndex)
     end
     
     -- Always update visibility conditions on state change
-    ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
+    CooldownHighlights:ApplyVisibilityConditions(trackerKey, slotIndex, isOnCooldown)
     --==========================================
     -- TODO: charge/count cooldown text, layout mode settings, proc glow, glow frame, 
     --==========================================
@@ -1514,7 +1556,7 @@ end
 
 local hideEnforcementHooks = {}
 
-local function StartHideEnforcement(trackerKey)
+function CooldownHighlights:StartHideEnforcement(trackerKey)
     if hideEnforcementHooks[trackerKey] then return end
     
     local viewer = GetViewer(trackerKey)
@@ -1523,7 +1565,7 @@ local function StartHideEnforcement(trackerKey)
     -- Hook Show() to prevent external code from showing the viewer
     local originalShow = viewer.Show
     viewer.Show = function(self)
-        if CooldownHighlights:GetState(trackerKey, "hideTracker") then
+        if shouldEverythingBeHidden(trackerKey) or CooldownHighlights:GetState(trackerKey, "hideTracker") then
             -- Silently ignore Show() calls when hideTracker is enabled
             return
         end
@@ -1533,7 +1575,7 @@ local function StartHideEnforcement(trackerKey)
     -- Hook SetAlpha() to prevent external code from changing alpha
     local originalSetAlpha = viewer.SetAlpha
     viewer.SetAlpha = function(self, alpha)
-        if CooldownHighlights:GetState(trackerKey, "hideTracker") then
+        if shouldEverythingBeHidden(trackerKey) or CooldownHighlights:GetState(trackerKey, "hideTracker") then
             -- Force alpha to 0 when hideTracker is enabled
             originalSetAlpha(self, 0)
             return
@@ -1547,7 +1589,8 @@ local function StartHideEnforcement(trackerKey)
     }
 end
 
-local function StopHideEnforcement(trackerKey)
+
+function CooldownHighlights:StopHideEnforcement(trackerKey)
     if not hideEnforcementHooks[trackerKey] then return end
     
     local viewer = GetViewer(trackerKey)
@@ -1893,7 +1936,7 @@ function CooldownHighlights:UpdateState(trackerKey, identifier, payload)
     
     -- Check if this is a hideTracker setting change (tracker-level, not per-slot)
     if string.find(payload.statePath, "hideTracker") then
-        self:ApplyTrackerVisibility(trackerKey)
+        CooldownHighlights:SetContainerVisibility(trackerKey)
     end
 
     if (string.find(payload.statePath, "hidden")) then
@@ -1981,7 +2024,7 @@ function CooldownHighlights:IsIconHidden(trackerKey, slotIndex)
 end
 
 -- Helper to check for CDM viewer layout issues (duplicate icons, stale state)
-local function HasViewerLayoutIssue(viewer)
+function CooldownHighlights:HasViewerLayoutIssue(viewer)
     local hasIssue = false
     local iconCount = 0
     
@@ -2008,46 +2051,6 @@ local function HasViewerLayoutIssue(viewer)
     end)
     
     return hasIssue, iconCount
-end
-
-function CooldownHighlights:ApplyTrackerVisibility(trackerKey)
-    local viewer = GetViewer(trackerKey)
-    if not viewer then return end
-    
-    if CooldownHighlights:GetState(trackerKey, "hideTracker") then
-        -- Use alpha + mouse disable instead of Hide() to avoid OnShow issues when unhiding
-        viewer:SetAlpha(0)
-        viewer:EnableMouse(false)
-        StartHideEnforcement(trackerKey)
-    else
-        StopHideEnforcement(trackerKey)
-        viewer:SetAlpha(1)
-        viewer:EnableMouse(true)
-        
-        -- Only call Show() if viewer is actually hidden, and protect against secret value errors
-        if not viewer:IsShown() then
-            -- Check for layout issues before showing (Blizzard CDM bug with stale icons)
-            local hasLayoutIssue, iconCount = HasViewerLayoutIssue(viewer)
-            
-            if hasLayoutIssue then
-                -- Don't try to Show() - it will trigger RefreshLayout which errors on duplicates
-                -- Alpha is already 1, so the viewer content is visible anyway
-                return
-            end
-            
-            -- Fix Midnight Beta secret value issue before showing
-            pcall(function()
-                for _, child in ipairs({viewer:GetChildren()}) do
-                    -- Clear secret values by setting to false using rawset
-                    rawset(child, "allowAvailableAlert", false)
-                    rawset(child, "allowOnCooldownAlert", false)
-                end
-            end)
-            
-            -- Wrap Show() in pcall - if it fails, the viewer is at least visible via alpha
-            pcall(viewer.Show, viewer)
-        end
-    end
 end
 
 function CooldownHighlights:GetSlotCount(trackerKey)
@@ -2399,7 +2402,7 @@ function CooldownHighlights:Initialize(trackerKey)
     C_Timer.After(3, RestoreDockAssignments)
     
     -- Apply tracker visibility
-    self:ApplyTrackerVisibility(trackerKey)
+    CooldownHighlights:SetContainerVisibility(trackerKey)
     
     -- Register callbacks
     local Layout = TUICD.Layout

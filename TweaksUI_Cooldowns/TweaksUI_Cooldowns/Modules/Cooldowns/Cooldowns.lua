@@ -3222,106 +3222,6 @@ end
 -- VISIBILITY SYSTEM FOR CUSTOM TRACKERS
 -- ========================================
 
--- Check if custom tracker frame should be visible based on conditions
-local function ShouldShowCustomTrackers()
-    -- Force all visible mode bypasses all visibility conditions
-    if TUICD.forceAllVisible then
-        return true
-    end
-    
-    -- Always show in Edit Mode for positioning
-    if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
-        return true
-    end
-    
-    local trackerKey = "customTrackers"
-    
-    -- Check if visibility conditions are enabled
-    if not GetSetting(trackerKey, "visibilityEnabled") then
-        return true  -- Always show if conditions not enabled
-    end
-    
-    local shouldShow = false
-    
-    -- Combat state
-    local inCombat = UnitAffectingCombat("player")
-    if inCombat and GetSetting(trackerKey, "showInCombat") then
-        shouldShow = true
-    end
-    if not inCombat and GetSetting(trackerKey, "showOutOfCombat") then
-        shouldShow = true
-    end
-    
-    -- Group state
-    local inRaid = IsInRaid()
-    local inParty = IsInGroup() and not inRaid
-    local solo = not IsInGroup()
-    
-    if solo and GetSetting(trackerKey, "showSolo") then
-        shouldShow = true
-    end
-    if inParty and GetSetting(trackerKey, "showInParty") then
-        shouldShow = true
-    end
-    if inRaid and GetSetting(trackerKey, "showInRaid") then
-        shouldShow = true
-    end
-    
-    -- Instance type
-    local _, instanceType = IsInInstance()
-    if instanceType == "party" and GetSetting(trackerKey, "showInInstance") then
-        shouldShow = true
-    end
-    if instanceType == "arena" and GetSetting(trackerKey, "showInArena") then
-        shouldShow = true
-    end
-    if instanceType == "pvp" and GetSetting(trackerKey, "showInBattleground") then
-        shouldShow = true
-    end
-    
-    -- Target state
-    local hasTarget = UnitExists("target")
-    if hasTarget and GetSetting(trackerKey, "showHasTarget") then
-        shouldShow = true
-    end
-    if not hasTarget and GetSetting(trackerKey, "showNoTarget") then
-        shouldShow = true
-    end
-    
-    return shouldShow
-end
-
--- Update custom tracker visibility
-local function UpdateCustomTrackerVisibility()
-    if not customTrackerFrame then return end
-    
-    -- Always show in Edit Mode for positioning
-    if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
-        customTrackerFrame:Show()
-        customTrackerFrame:SetAlpha(1.0)
-        return
-    end
-    
-    -- Check if hidden via per-icon settings
-    local CooldownHighlights = TUICD.CooldownHighlights
-    
-    -- Check if enabled at all
-    if not GetSetting("customTrackers", "enabled") then
-        customTrackerFrame:Hide()
-        return
-    end
-    
-    local shouldShow = ShouldShowCustomTrackers()
-    local trackerKey = "customTrackers"
-    
-    if shouldShow then
-        customTrackerFrame:Show()
-        customTrackerFrame:SetAlpha(GetCombatAwareOpacity(trackerKey))
-    else
-        customTrackerFrame:Hide()
-    end
-end
-
 -- Helper to count table entries
 local function CountTableEntries(t)
     local count = 0
@@ -4367,7 +4267,9 @@ local function UpdateTrackerVisibility(trackerKey)
     
     local viewer = _G[trackerInfo.name]
     if not viewer then return end
-    
+    if TUICD.CooldownHighlights and TUICD.CooldownHighlights.SetContainerVisibility then
+        TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+    end
     -- During initialization, keep everything hidden
     local TUIFrame = TUICD.TUIFrame
     if TUIFrame and not TUIFrame.IsInitializationComplete() then
@@ -6367,57 +6269,96 @@ function Cooldowns:CreateTrackerPanel(trackerKey)
         
         y = CreateCheckbox(parent, y, "Enable Visibility Conditions",
             function() return GetSetting(trackerKey, "visibilityEnabled") or false end,
-            function(v) SetSetting(trackerKey, "visibilityEnabled", v) end)
+            function(v)
+                SetSetting(trackerKey, "visibilityEnabled", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateHeader(parent, y, "Show When (OR logic)")
         
         y = CreateCheckbox(parent, y, "In Combat",
             function() return GetSetting(trackerKey, "showInCombat") end,
-            function(v) SetSetting(trackerKey, "showInCombat", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInCombat", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Out of Combat",
             function() return GetSetting(trackerKey, "showOutOfCombat") end,
-            function(v) SetSetting(trackerKey, "showOutOfCombat", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showOutOfCombat", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Solo",
             function() return GetSetting(trackerKey, "showSolo") end,
-            function(v) SetSetting(trackerKey, "showSolo", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showSolo", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Party",
             function() return GetSetting(trackerKey, "showInParty") end,
-            function(v) SetSetting(trackerKey, "showInParty", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInParty", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Raid",
             function() return GetSetting(trackerKey, "showInRaid") end,
-            function(v) SetSetting(trackerKey, "showInRaid", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInRaid", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Instance (Dungeon)",
             function() return GetSetting(trackerKey, "showInInstance") end,
-            function(v) SetSetting(trackerKey, "showInInstance", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInInstance", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Arena",
             function() return GetSetting(trackerKey, "showInArena") end,
-            function(v) SetSetting(trackerKey, "showInArena", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInArena", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Battleground",
             function() return GetSetting(trackerKey, "showInBattleground") end,
-            function(v) SetSetting(trackerKey, "showInBattleground", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInBattleground", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Has Target",
             function() return GetSetting(trackerKey, "showHasTarget") end,
-            function(v) SetSetting(trackerKey, "showHasTarget", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showHasTarget", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "No Target",
             function() return GetSetting(trackerKey, "showNoTarget") end,
-            function(v) SetSetting(trackerKey, "showNoTarget", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showNoTarget", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Mounted",
             function() return GetSetting(trackerKey, "showMounted") end,
-            function(v) SetSetting(trackerKey, "showMounted", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showMounted", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Not Mounted",
             function() return GetSetting(trackerKey, "showNotMounted") end,
-            function(v) SetSetting(trackerKey, "showNotMounted", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showNotMounted", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateHeader(parent, y, "Interaction")
         
@@ -10466,57 +10407,96 @@ function Cooldowns:CreateCustomTrackersPanel()
         
         y = CreateCheckbox(parent, y, "Enable Visibility Conditions",
             function() return GetSetting(trackerKey, "visibilityEnabled") or false end,
-            function(v) SetSetting(trackerKey, "visibilityEnabled", v) end)
+            function(v) 
+                SetSetting(trackerKey, "visibilityEnabled", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateHeader(parent, y, "Show When (OR logic)")
         
         y = CreateCheckbox(parent, y, "In Combat",
             function() return GetSetting(trackerKey, "showInCombat") end,
-            function(v) SetSetting(trackerKey, "showInCombat", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInCombat", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Out of Combat",
             function() return GetSetting(trackerKey, "showOutOfCombat") end,
-            function(v) SetSetting(trackerKey, "showOutOfCombat", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showOutOfCombat", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Solo",
             function() return GetSetting(trackerKey, "showSolo") end,
-            function(v) SetSetting(trackerKey, "showSolo", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showSolo", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Party",
             function() return GetSetting(trackerKey, "showInParty") end,
-            function(v) SetSetting(trackerKey, "showInParty", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInParty", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Raid",
             function() return GetSetting(trackerKey, "showInRaid") end,
-            function(v) SetSetting(trackerKey, "showInRaid", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInRaid", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Instance (Dungeon)",
             function() return GetSetting(trackerKey, "showInInstance") end,
-            function(v) SetSetting(trackerKey, "showInInstance", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInInstance", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Arena",
             function() return GetSetting(trackerKey, "showInArena") end,
-            function(v) SetSetting(trackerKey, "showInArena", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInArena", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "In Battleground",
             function() return GetSetting(trackerKey, "showInBattleground") end,
-            function(v) SetSetting(trackerKey, "showInBattleground", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showInBattleground", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Has Target",
             function() return GetSetting(trackerKey, "showHasTarget") end,
-            function(v) SetSetting(trackerKey, "showHasTarget", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showHasTarget", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "No Target",
             function() return GetSetting(trackerKey, "showNoTarget") end,
-            function(v) SetSetting(trackerKey, "showNoTarget", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showNoTarget", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Mounted",
             function() return GetSetting(trackerKey, "showMounted") end,
-            function(v) SetSetting(trackerKey, "showMounted", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showMounted", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateCheckbox(parent, y, "Not Mounted",
             function() return GetSetting(trackerKey, "showNotMounted") end,
-            function(v) SetSetting(trackerKey, "showNotMounted", v) end)
+            function(v) 
+                SetSetting(trackerKey, "showNotMounted", v)
+                TUICD.CooldownHighlights:SetContainerVisibility(trackerKey)
+            end)
         
         y = CreateHeader(parent, y, "Interaction")
         
