@@ -215,54 +215,6 @@ local function GetHighlightFrame(trackerType, slotIndex)
     end
 end
 
--- Check if a docked icon should actually be visible (has active buff/cooldown)
--- This is more reliable than IsShown() since layout mode can force-show frames
-local function IsDockedIconActive(trackerType, slotIndex, frame)
-    if not frame then return false end
-    
-    -- Check if layout mode is active - if so, show all docked icons
-    local isLayoutMode = TUICD.Layout and TUICD.Layout:IsActive()
-    if isLayoutMode then
-        return true
-    end
-    
-    -- First check if the frame is hidden by the highlight module
-    -- (BuffHighlights/CooldownHighlights may hide inactive frames)
-    if not frame:IsShown() then
-        return false
-    end
-    
-    -- For buffs, check if the icon has a valid texture and is not desaturated
-    if trackerType == "buffs" then
-        local icon = frame.icon or frame.Icon
-        if icon then
-            local texture = nil
-            pcall(function() texture = icon:GetTexture() end)
-            if texture and texture ~= 134400 and texture ~= "Interface\\Icons\\INV_Misc_QuestionMark" then
-                -- Has a real texture - check desaturated state
-                -- Not desaturated = buff is active
-                local desaturated = icon:IsDesaturated()
-                if not desaturated then
-                    return true
-                end
-            end
-        end
-        return false
-    else
-        -- For cooldowns (essential, utility, customTrackers)
-        -- Check if the icon is desaturated (inactive) or not (active/on cooldown)
-        local icon = frame.icon or frame.Icon
-        if icon then
-            local desaturated = icon:IsDesaturated()
-            -- If not desaturated, it's on cooldown (active)
-            if not desaturated then
-                return true
-            end
-        end
-        return false
-    end
-end
-
 -- ============================================================================
 -- VISIBILITY EVALUATION
 -- ============================================================================
@@ -764,7 +716,7 @@ local function GetSortedVisibleIcons(dockIndex)
         if iconInfo and iconInfo.frame then
             -- Use IsDockedIconActive instead of just IsShown()
             -- This properly handles layout mode exit by checking actual icon state
-            if IsDockedIconActive(iconInfo.trackerType, iconInfo.slotIndex, iconInfo.frame) then
+            if (iconInfo.frame:IsShown()) then
                 table.insert(visible, iconInfo)
             end
         end

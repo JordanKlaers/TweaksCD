@@ -2340,6 +2340,42 @@ local function ApplyGridLayout(viewer, trackerKey)
     return true
 end
 
+-- Update custom tracker visibility
+local function UpdateCustomTrackerVisibility()
+    if not customTrackerFrame then return end
+    
+    -- Always show in Edit Mode for positioning
+    if EditModeManagerFrame and EditModeManagerFrame:IsShown() then
+        customTrackerFrame:Show()
+        customTrackerFrame:SetAlpha(1.0)
+        return
+    end
+    
+    -- Check if hidden via per-icon settings
+    local CooldownHighlights = TUICD.CooldownHighlights
+    if CooldownHighlights and CooldownHighlights:GetState("custom", "trackerHidden") then
+        customTrackerFrame:Hide()
+        return
+    end
+    
+    -- Check if enabled at all
+    if not GetSetting("customTrackers", "enabled") then
+        customTrackerFrame:Hide()
+        return
+    end
+    
+    local shouldShow = ShouldShowCustomTrackers()
+    local trackerKey = "customTrackers"
+    
+    if shouldShow then
+        customTrackerFrame:Show()
+        customTrackerFrame:SetAlpha(GetCombatAwareOpacity(trackerKey))
+    else
+        customTrackerFrame:Hide()
+    end
+end
+
+
 -- Public function to refresh a tracker's layout (called from Highlights modules)
 function Cooldowns.RefreshTrackerLayout(trackerKey)
     if trackerKey == "custom" or trackerKey == "customTrackers" then
