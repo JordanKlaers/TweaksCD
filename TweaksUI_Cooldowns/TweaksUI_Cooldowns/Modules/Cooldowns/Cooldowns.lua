@@ -2343,7 +2343,7 @@ local function UpdateCustomTrackerVisibility()
     end
     
     local trackerKey = "customTrackers"
-    local shouldShow = ShouldBeVisible(trackerKey)
+    local shouldShow = Cooldowns:ShouldBeVisible(trackerKey)
     
     if shouldShow then
         customTrackerFrame:Show()
@@ -4153,7 +4153,7 @@ local function GetPlayerState()
 end
 
 -- Check if viewer should be visible based on conditions
-local function ShouldBeVisible(trackerKey)
+function Cooldowns:ShouldBeVisible(trackerKey)
     -- Force all visible mode bypasses all visibility conditions
     if TUICD.forceAllVisible then
         return true
@@ -4203,7 +4203,7 @@ local function GetTargetAlpha(trackerKey)
         end
     end
     
-    local shouldShow = ShouldBeVisible(trackerKey)
+    local shouldShow = Cooldowns:ShouldBeVisible(trackerKey)
     
     if shouldShow then
         return 1  -- Visible
