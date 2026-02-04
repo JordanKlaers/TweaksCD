@@ -3501,7 +3501,6 @@ local function LayoutCustomTrackerIcons()
                 
                 -- Apply current settings immediately
                 pcall(function()
-                    if (currentIconIdx == 2) then DevTool:AddData(self, "SetCooldown: " .. currentIconIdx) end
                     cdFrame:SetDrawSwipe(not hideSweep)
                     cdFrame:SetDrawEdge(not hideSweep)
                     cdFrame:SetHideCountdownNumbers(not showCountdownText)
@@ -3920,7 +3919,6 @@ local function LayoutCustomTrackerIcons()
                     cdFrame._TUI_showCountdownText = showCountdownText
                     hooksecurefunc(cdFrame, "SetCooldown", function(self)
                         pcall(function()
-                            if (i == 2) then DevTool:AddData(self, "SetCooldown: " .. i) end
                             self:SetDrawSwipe(not self._TUI_hideSweep)
                             self:SetDrawEdge(not self._TUI_hideSweep)
                             self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
@@ -3930,7 +3928,6 @@ local function LayoutCustomTrackerIcons()
                     if cdFrame.SetCooldownFromDurationObject then
                         hooksecurefunc(cdFrame, "SetCooldownFromDurationObject", function(self)
                             pcall(function()
-                                if (i == 2) then DevTool:AddData(self, "SetCooldoSetCooldownFromDurationObjectwn: " .. i) end
                                 self:SetDrawSwipe(not self._TUI_hideSweep)
                                 self:SetDrawEdge(not self._TUI_hideSweep)
                                 self:SetHideCountdownNumbers(not self._TUI_showCountdownText)
@@ -9077,21 +9074,33 @@ function Cooldowns:BuildPerIconTab(parent, trackerType)
         
         -- Custom icon texture handlers (spell ID-based)
         controls.iconTextureBox:SetScript("OnEnterPressed", function(self)
-            self:ClearFocus()
             local spellID = self._currentSpellID
+            local textValue = self:GetText()
+            -- DevTool:AddData({
+            --     textValue = textValue,
+            --     spellID = spellID,
+            --     self = self
+            -- },"adding path")
+            self:ClearFocus()
             if spellID then
                 CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
                     statePath = "customIconTexture." .. tostring(spellID),
-                    value = self:GetText()
+                    value = textValue
                 })
             end
         end)
         controls.iconTextureBox:SetScript("OnEditFocusLost", function(self)
             local spellID = self._currentSpellID
+            local textValue = self:GetText()
+            -- DevTool:AddData({
+            --     textValue = textValue,
+            --     spellID = spellID,
+            --     self = self
+            -- },"adding path2")
             if spellID then
                 CooldownHighlights:UpdateState(customTrackerKey, {spellId = spellID}, {
                     statePath = "customIconTexture." .. tostring(spellID),
-                    value = self:GetText()
+                    value = textValue
                 })
             end
         end)
