@@ -427,13 +427,26 @@ function RadialSwipe:SetScale(scalex, scaley)
   self:UpdateTextures()
 end
 
-function RadialSwipe:OnUpdate(parentFrame)
+function RadialSwipe:OnUpdate(parentFrame, state)
 	if not parentFrame.cooldown or not parentFrame.cooldown.GetCooldownTimes then
 		return
 	end
 	
 	local start, duration = parentFrame.cooldown:GetCooldownTimes()
 	
+	-- Use cooldownData duration if available
+	if issecretvalue(duration) and parentFrame.cooldownData and parentFrame.cooldownData.duration then
+		duration = parentFrame.cooldownData.duration * 1000  -- Convert to milliseconds
+	end
+	
+	-- Check if GetCooldownTimes returns secret values (0, 0) and state is 'isStart'
+	if issecretvalue(start) and state == 'isStart' then
+		start = GetTime() * 1000  -- Convert to milliseconds to match GetCooldownTimes format
+	end
+	if (issecretvalue(start) or issecretvalue(duration)) then
+    --if they are still secret, return
+    return
+  end
 	-- Initialize cooldown tracking on first call (requires valid cooldown data)
 	if not parentFrame.radialSwipe.realCooldownStart or not parentFrame.radialSwipe.realCooldownDuration then 
 		local startSec = start / 1000
@@ -452,9 +465,9 @@ function RadialSwipe:OnUpdate(parentFrame)
     or progress >= 1
     or (not start or not duration or duration == 0 or duration < GCD_THRESHOLD) then
 		-- Cooldown finished/cancelled/GCD - stop recursion and apply final visibility
-		local radialDisplayState = TUICD.CooldownHighlights:GetState(parentFrame.trackerKey, "radialSwipe.displayState." .. parentFrame.slotIndex) or "always"
+		local radialDisplayState = "awlways" --TUICD.CooldownHighlights:GetState(parentFrame.trackerKey, "radialSwipe.displayState." .. parentFrame.slotIndex) or "always"
 		if radialDisplayState == "always" or radialDisplayState == "available" then
-			parentFrame.radialSwipe:SetProgressValue(1, 0, 360)
+			parentFrame.radialSwipe:SetProgressValue(duration, 0, 360)
 			parentFrame.radialSwipe:Show()
 		else
 			parentFrame.radialSwipe:Hide()

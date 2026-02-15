@@ -347,8 +347,8 @@ function SpellbookHelper:ProcessDrop()
         helperPanel.dropText:SetText("|cff00ff00Added: " .. entryName .. "|r")
         
         -- Rebuild tracker and refresh list
-        if RebuildCustomTrackerIcons then
-            RebuildCustomTrackerIcons()
+        if TUICD.Cooldowns.FireTrackerListUpdate then
+            TUICD.Cooldowns.FireTrackerListUpdate()
         end
         RefreshEntryList()
         

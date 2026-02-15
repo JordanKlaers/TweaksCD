@@ -112,6 +112,7 @@ function DB:Initialize()
     self:RunMigrations()
     
     TUICD:PrintDebug("Database initialized (character-specific mode)")
+    TUICD.Events:Fire("DATABASE_LOADED")
 end
 
 -- Ensure all default values exist

@@ -74,10 +74,9 @@ Modules\Cooldowns\CooldownClones.lua
 Modules\Cooldowns\RadialSwipe.lua
 Modules\Cooldowns\SpellbookHelper.lua
 Modules\Cooldowns\Cooldowns.lua
-Modules\Cooldowns\Docks.lua
-Modules\Cooldowns\DocksUI.lua
-Modules\Cooldowns\BuffHighlights.lua
-Modules\Cooldowns\CooldownHighlights.lua
+Modules\Cooldowns\newDocks.lua
+Modules\Cooldowns\FrameTrackerManager.lua
+
 
 # ============================================================================
 # Modules - Profiles UI
