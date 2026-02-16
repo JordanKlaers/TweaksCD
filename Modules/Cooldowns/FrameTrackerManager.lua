@@ -7,12 +7,7 @@
 local addonName, TUICD = ...
 TUICD.FrameTrackerManager = TUICD.FrameTrackerManager or {}
 local FrameTrackerManager = TUICD.FrameTrackerManager
-
-local RadialSwipe = TUICD.RadialSwipe or {}
 local FRAME_PREFIX = "TweaksUI_CustomFrameTracker_"
-
-
-
 
 -- ============================================================================
 --[[
@@ -50,20 +45,13 @@ local cooldownManagerFrames = {
     utility = {}
 }
 
--- updateFrame is defined in the UPDATE SYSTEM section
-local isInitialized = false
-
--- Event frame for UNIT_AURA and PLAYER_ENTERING_WORLD
-local eventFrame = CreateFrame("Frame")
-
--- ============================================================================
--- DATABASE
--- ============================================================================
 local TUICD_frames = {
     buffs = {},
     essential = {},
     utility = {}
 }
+-- updateFrame is defined in the UPDATE SYSTEM section
+local isInitialized = false
 
 local function accessNestedValue(tbl, path, value, action)
     local keys = {}
@@ -369,12 +357,6 @@ local function GetPlayerState()
     return state
 end
 
-
--- ============================================================================
--- BUFF SLOT ACCESS
--- ============================================================================
-
--- Get the buffs viewer frame
 function FrameTrackerManager:GetCooldownManagerViewer(trackerType)
     local viewers = {
         buffs = _G["BuffIconCooldownViewer"],
@@ -454,10 +436,6 @@ local function ScanAndSaveCurrentCooldownManagerFrames(trackerType)
     end
     FrameTrackerManager:RegisterAllWithLayout()
 end
-
--- ============================================================================
--- HIGHLIGHT FRAME CREATION (Clone-based - we create our own frame and copy data)
--- ============================================================================
 
 function FrameTrackerManager:CreateTrackerFrame(uniqueID, trackerConfig, trackerType)
     if TUICD_frames[trackerType][uniqueID] then
@@ -875,9 +853,6 @@ function FrameTrackerManager:UpdateFrame_ConfigurationChanges(uniqueID, trackerT
     )
 end
 
---[[
-    This method is used to update properties that can only be configured when the buffs is active
-]]
 function FrameTrackerManager:UpdateFrame_AuraEvent(uniqueID, isBuffActive)
     local frame = TUICD_frames["buffs"][uniqueID]
     if not frame then
@@ -947,7 +922,6 @@ function FrameTrackerManager:UpdateFrame_AuraEvent(uniqueID, isBuffActive)
 
     FrameTrackerManager:UpdateFrame_ApplyAllVisabilityConditions(uniqueID, 'buffs')
 end
-
 
 function FrameTrackerManager:UpdateFrame_CooldownEvent(uniqueID, trackerType)
     local frame = TUICD_frames[trackerType][uniqueID]
@@ -1229,11 +1203,6 @@ function FrameTrackerManager:UnregisterFromLayout(uniqueID)
 end
 
 
--- ============================================================================
--- PUBLIC API
--- ============================================================================
-
-
 -- Set up hooks on BuffIconCooldownViewer to mirror cooldown updates
 function FrameTrackerManager:SetupCooldownManagerHooks()
     for _, trackerType in ipairs({"buffs", "essential", "utility"}) do
@@ -1436,6 +1405,8 @@ function FrameTrackerManager:Initalize()
     end)
 end
 
+-- Event frame for UNIT_AURA and PLAYER_ENTERING_WORLD
+local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 eventFrame:SetScript("OnEvent", function(self, event, ...)

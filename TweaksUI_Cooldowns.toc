@@ -24,22 +24,8 @@ Libs\LibFlyPaper-2.0\LibFlyPaper-2.0.lua
 # ============================================================================
 Core\Constants.lua
 Core\Events.lua
-Core\Utilities.lua
 Core\GlobalScale.lua
 Core\Media.lua
-
-# ============================================================================
-# Core - API Layer (Midnight-native)
-# ============================================================================
-Core\API\API.lua
-Core\API\SpellAPI.lua
-Core\API\AuraAPI.lua
-Core\API\DurationAPI.lua
-Core\API\CurveAPI.lua
-Core\API\RestrictionAPI.lua
-Core\API\SecretAPI.lua
-Core\API\StatusBarAPI.lua
-Core\API\UnitAPI.lua
 
 # ============================================================================
 # Core - Database & Profiles
@@ -52,7 +38,6 @@ Core\ProfileImportExport.lua
 # Core - UI Framework
 # ============================================================================
 Core\TUIFrame.lua
-Core\TabbedPanel.lua
 Core\SnapLocking.lua
 Core\ModuleManager.lua
 Core\MinimapButton.lua
@@ -68,11 +53,7 @@ Modules\Layout\UIElements.lua
 
 # ============================================================================
 # Modules - Cooldowns (from TweaksUI)
-# Note: CooldownClones must be loaded first as Cooldowns depends on CooldownContainers
 # ============================================================================
-Modules\Cooldowns\CooldownClones.lua
-Modules\Cooldowns\RadialSwipe.lua
-Modules\Cooldowns\SpellbookHelper.lua
 Modules\Cooldowns\Cooldowns.lua
 Modules\Cooldowns\newDocks.lua
 Modules\Cooldowns\FrameTrackerManager.lua

@@ -417,6 +417,42 @@ end
 -- Visibility condition defaults
 
 -- Get current player state for visibility checks
+function UnitAPI:IsMountedOrTravelForm()
+    -- First check standard mounted state
+    if IsMounted() then
+        return true
+    end
+    
+    -- Check for druid travel forms
+    local _, playerClass = UnitClass("player")
+    if playerClass == "DRUID" then
+        local formID = GetShapeshiftForm()
+        -- Druid travel-related forms:
+        -- The exact indices can vary but we check common travel form indices
+        -- Form 3 is typically Travel Form (ground/flight)
+        -- Form 4 is typically Aquatic Form
+        -- We also check GetShapeshiftFormID for the spell ID
+        if formID and formID > 0 then
+            local spellID = select(4, GetShapeshiftFormInfo(formID))
+            -- Known travel form spell IDs
+            if spellID == 783 or      -- Travel Form
+               spellID == 165962 or   -- Flight Form (old)
+               spellID == 210053 or   -- Mount Form (stag)
+               spellID == 1066 then   -- Aquatic Form
+                return true
+            end
+        end
+    end
+    
+    -- Also check shaman Ghost Wolf (optional - uncomment if desired)
+    -- if playerClass == "SHAMAN" then
+    --     local aura = C_UnitAuras.GetPlayerAuraBySpellID(2645) -- Ghost Wolf
+    --     if aura then return true end
+    -- end
+    
+    return false
+end
+
 local function GetPlayerState()
     local state = {
         inCombat = InCombatLockdown() or UnitAffectingCombat("player"),
@@ -427,7 +463,7 @@ local function GetPlayerState()
         inBattleground = false,
         isSolo = not IsInGroup(),
         hasTarget = UnitExists("target"),
-        isMounted = TUICD.UnitAPI and TUICD.UnitAPI:IsMountedOrTravelForm() or IsMounted(),
+        isMounted = 
     }
     
     -- Check instance type
